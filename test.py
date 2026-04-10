@@ -1,0 +1,1 @@
+print("MeetMid 테스트")
