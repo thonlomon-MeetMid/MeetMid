@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>장소 추천</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #f5f5f5;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 520px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+    }
+
+    h1 {
+      font-size: 22px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      color: #111;
+    }
+
+    p.subtitle {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 24px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+    }
+
+    input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      border: 1.5px solid #ddd;
+      border-radius: 10px;
+      font-size: 15px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    input[type="text"]:focus {
+      border-color: #4f8ef7;
+    }
+
+    button {
+      padding: 12px 20px;
+      background: #4f8ef7;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+
+    button:hover { background: #3a7ae0; }
+    button:disabled { background: #aac4f5; cursor: not-allowed; }
+
+    .result {
+      margin-top: 28px;
+    }
+
+    .result-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #888;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 12px;
+    }
+
+    .place-card {
+      background: #f9f9f9;
+      border: 1px solid #eee;
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 10px;
+      font-size: 15px;
+      color: #222;
+      line-height: 1.5;
+    }
+
+    .place-card .num {
+      font-weight: 700;
+      color: #4f8ef7;
+      margin-right: 6px;
+    }
+
+    .error {
+      color: #e05252;
+      font-size: 14px;
+      margin-top: 16px;
+    }
+
+    .loading {
+      color: #888;
+      font-size: 14px;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>장소 추천</h1>
+    <p class="subtitle">검색어를 입력하면 관련 장소 3곳을 추천해드려요.</p>
+
+    <div class="input-row">
+      <input type="text" id="query" placeholder="예: 강남역 주변 술집" />
+      <button id="btn" onclick="search()">추천받기</button>
+    </div>
+
+    <div class="result" id="result"></div>
+  </div>
+
+  <script>
+    document.getElementById("query").addEventListener("keydown", function(e) {
+      if (e.key === "Enter") search();
+    });
+
+    async function search() {
+      const query = document.getElementById("query").value.trim();
+      const resultDiv = document.getElementById("result");
+      const btn = document.getElementById("btn");
+
+      if (!query) {
+        resultDiv.innerHTML = '<p class="error">검색어를 입력해주세요.</p>';
+        return;
+      }
+
+      btn.disabled = true;
+      resultDiv.innerHTML = '<p class="loading">추천 장소를 찾고 있어요...</p>';
+
+      try {
+        const res = await fetch("/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query })
+        });
+
+        const data = await res.json();
+
+        if (data.error) {
+          resultDiv.innerHTML = `<p class="error">${data.error}</p>`;
+          return;
+        }
+
+        const lines = data.result.trim().split("\n").filter(l => l.trim());
+        let html = '<p class="result-title">추천 장소</p>';
+
+        lines.forEach(line => {
+          const match = line.match(/^(\d+)\.\s+(.+)/);
+          if (match) {
+            html += `<div class="place-card"><span class="num">${match[1]}.</span>${match[2]}</div>`;
+          }
+        });
+
+        resultDiv.innerHTML = html;
+      } catch (e) {
+        resultDiv.innerHTML = '<p class="error">오류가 발생했습니다. 다시 시도해주세요.</p>';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
