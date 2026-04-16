@@ -14,8 +14,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
 lib64/
+
+# Flutter lib 디렉토리는 추적
+!flutter_app/lib/
 parts/
 sdist/
 var/
