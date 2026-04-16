@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>장소 추천</title>
+  <title>MeetMid - 장소 추천</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     body {
       font-family: 'Segoe UI', sans-serif;
-      background: #f5f5f5;
+      background: #f0f4ff;
       display: flex;
       justify-content: center;
       align-items: center;
@@ -18,115 +18,260 @@
 
     .container {
       background: white;
-      border-radius: 16px;
-      padding: 40px;
+      border-radius: 20px;
       width: 100%;
-      max-width: 520px;
-      box-shadow: 0 4px 24px rgba(0,0,0,0.08);
-    }
-
-    h1 {
-      font-size: 22px;
-      font-weight: 700;
-      margin-bottom: 8px;
-      color: #111;
-    }
-
-    p.subtitle {
-      font-size: 14px;
-      color: #888;
-      margin-bottom: 24px;
-    }
-
-    .input-row {
+      max-width: 560px;
+      box-shadow: 0 8px 32px rgba(79,142,247,0.12);
       display: flex;
+      flex-direction: column;
+      height: 90vh;
+      max-height: 720px;
+      overflow: hidden;
+    }
+
+    /* 헤더 */
+    .header {
+      background: linear-gradient(135deg, #4f8ef7, #2e5fac);
+      padding: 20px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .logo-icon {
+      width: 36px;
+      height: 36px;
+      background: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+    }
+
+    .logo-text {
+      color: white;
+    }
+
+    .logo-text h1 {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .logo-text p {
+      font-size: 11px;
+      opacity: 0.8;
+      margin-top: 1px;
+    }
+
+    .clear-btn {
+      background: rgba(255,255,255,0.2);
+      border: none;
+      color: white;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .clear-btn:hover { background: rgba(255,255,255,0.3); }
+
+    /* 채팅 영역 */
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #aaa;
+      gap: 12px;
+      text-align: center;
+    }
+
+    .empty-state .icon { font-size: 48px; }
+    .empty-state p { font-size: 14px; line-height: 1.6; }
+
+    /* 채팅 버블 */
+    .chat-block { display: flex; flex-direction: column; gap: 8px; }
+
+    .bubble-user {
+      align-self: flex-end;
+      background: #4f8ef7;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 16px 16px 4px 16px;
+      font-size: 14px;
+      max-width: 80%;
+      line-height: 1.5;
+    }
+
+    .bubble-bot {
+      align-self: flex-start;
+      max-width: 90%;
+      display: flex;
+      flex-direction: column;
       gap: 8px;
+    }
+
+    .bot-label {
+      font-size: 11px;
+      color: #aaa;
+      margin-left: 4px;
+    }
+
+    .place-card {
+      background: #f8faff;
+      border: 1.5px solid #e0eaff;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 14px;
+      color: #222;
+      line-height: 1.6;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    .place-card:hover {
+      border-color: #4f8ef7;
+      box-shadow: 0 2px 8px rgba(79,142,247,0.1);
+    }
+
+    .place-card .num {
+      font-weight: 700;
+      color: #4f8ef7;
+      margin-right: 4px;
+    }
+
+    .place-card .name {
+      font-weight: 600;
+      color: #1a1a1a;
+    }
+
+    .place-card .desc {
+      color: #666;
+      font-size: 13px;
+      margin-top: 4px;
+    }
+
+    .map-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-top: 6px;
+      font-size: 12px;
+      color: #4f8ef7;
+      text-decoration: none;
+      font-weight: 600;
+    }
+
+    .map-link:hover { text-decoration: underline; }
+
+    /* 로딩 */
+    .loading-bubble {
+      align-self: flex-start;
+      background: #f0f4ff;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #888;
+    }
+
+    .dots span {
+      animation: blink 1.2s infinite;
+      display: inline-block;
+    }
+    .dots span:nth-child(2) { animation-delay: 0.2s; }
+    .dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes blink {
+      0%, 80%, 100% { opacity: 0.2; }
+      40% { opacity: 1; }
+    }
+
+    /* 입력창 */
+    .input-area {
+      padding: 16px 20px;
+      border-top: 1px solid #f0f0f0;
+      display: flex;
+      gap: 10px;
+      background: white;
     }
 
     input[type="text"] {
       flex: 1;
       padding: 12px 16px;
-      border: 1.5px solid #ddd;
-      border-radius: 10px;
-      font-size: 15px;
+      border: 1.5px solid #dde6ff;
+      border-radius: 12px;
+      font-size: 14px;
       outline: none;
       transition: border-color 0.2s;
+      background: #f8faff;
     }
 
-    input[type="text"]:focus {
-      border-color: #4f8ef7;
-    }
+    input[type="text"]:focus { border-color: #4f8ef7; background: white; }
 
-    button {
+    .send-btn {
       padding: 12px 20px;
       background: #4f8ef7;
       color: white;
       border: none;
-      border-radius: 10px;
-      font-size: 15px;
+      border-radius: 12px;
+      font-size: 14px;
       font-weight: 600;
       cursor: pointer;
       transition: background 0.2s;
       white-space: nowrap;
     }
 
-    button:hover { background: #3a7ae0; }
-    button:disabled { background: #aac4f5; cursor: not-allowed; }
+    .send-btn:hover { background: #3a7ae0; }
+    .send-btn:disabled { background: #aac4f5; cursor: not-allowed; }
 
-    .result {
-      margin-top: 28px;
-    }
-
-    .result-title {
-      font-size: 13px;
-      font-weight: 600;
-      color: #888;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      margin-bottom: 12px;
-    }
-
-    .place-card {
-      background: #f9f9f9;
-      border: 1px solid #eee;
-      border-radius: 10px;
-      padding: 14px 18px;
-      margin-bottom: 10px;
-      font-size: 15px;
-      color: #222;
-      line-height: 1.5;
-    }
-
-    .place-card .num {
-      font-weight: 700;
-      color: #4f8ef7;
-      margin-right: 6px;
-    }
-
-    .error {
-      color: #e05252;
-      font-size: 14px;
-      margin-top: 16px;
-    }
-
-    .loading {
-      color: #888;
-      font-size: 14px;
-      margin-top: 16px;
-    }
+    .error-msg { color: #e05252; font-size: 13px; align-self: center; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>장소 추천</h1>
-    <p class="subtitle">검색어를 입력하면 관련 장소 3곳을 추천해드려요.</p>
-
-    <div class="input-row">
-      <input type="text" id="query" placeholder="예: 강남역 주변 술집" />
-      <button id="btn" onclick="search()">추천받기</button>
+    <!-- 헤더 -->
+    <div class="header">
+      <div class="logo">
+        <div class="logo-icon">📍</div>
+        <div class="logo-text">
+          <h1>MeetMid</h1>
+          <p>AI 장소 추천 서비스</p>
+        </div>
+      </div>
+      <button class="clear-btn" onclick="clearChat()">대화 초기화</button>
     </div>
 
-    <div class="result" id="result"></div>
+    <!-- 채팅 영역 -->
+    <div class="chat-area" id="chatArea">
+      <div class="empty-state" id="emptyState">
+        <div class="icon">🗺️</div>
+        <p>어디로 갈지 고민되시나요?<br>장소를 검색하면 AI가 추천해드려요!</p>
+        <p style="font-size:12px; color:#ccc;">예: 강남역 근처 카페, 홍대 데이트 코스</p>
+      </div>
+    </div>
+
+    <!-- 입력창 -->
+    <div class="input-area">
+      <input type="text" id="query" placeholder="장소를 검색해보세요..." />
+      <button class="send-btn" id="btn" onclick="search()">추천받기</button>
+    </div>
   </div>
 
   <script>
@@ -135,17 +280,32 @@
     });
 
     async function search() {
-      const query = document.getElementById("query").value.trim();
-      const resultDiv = document.getElementById("result");
+      const input = document.getElementById("query");
+      const query = input.value.trim();
+      const chatArea = document.getElementById("chatArea");
       const btn = document.getElementById("btn");
+      const emptyState = document.getElementById("emptyState");
 
-      if (!query) {
-        resultDiv.innerHTML = '<p class="error">검색어를 입력해주세요.</p>';
-        return;
-      }
+      if (!query) return;
 
+      // 빈 상태 제거
+      if (emptyState) emptyState.remove();
+
+      // 사용자 버블
+      const userBubble = document.createElement("div");
+      userBubble.className = "bubble-user";
+      userBubble.textContent = query;
+      chatArea.appendChild(userBubble);
+
+      // 로딩
+      const loadingEl = document.createElement("div");
+      loadingEl.className = "loading-bubble";
+      loadingEl.innerHTML = '추천 장소 찾는 중 <span class="dots"><span>.</span><span>.</span><span>.</span></span>';
+      chatArea.appendChild(loadingEl);
+
+      input.value = "";
       btn.disabled = true;
-      resultDiv.innerHTML = '<p class="loading">추천 장소를 찾고 있어요...</p>';
+      chatArea.scrollTop = chatArea.scrollHeight;
 
       try {
         const res = await fetch("/recommend", {
@@ -153,30 +313,72 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ query })
         });
-
         const data = await res.json();
+        loadingEl.remove();
 
         if (data.error) {
-          resultDiv.innerHTML = `<p class="error">${data.error}</p>`;
+          const err = document.createElement("p");
+          err.className = "error-msg";
+          err.textContent = data.error;
+          chatArea.appendChild(err);
           return;
         }
 
-        const lines = data.result.trim().split("\n").filter(l => l.trim());
-        let html = '<p class="result-title">추천 장소</p>';
+        // 봇 응답 블록
+        const botBlock = document.createElement("div");
+        botBlock.className = "bubble-bot";
 
+        const label = document.createElement("div");
+        label.className = "bot-label";
+        label.textContent = "MeetMid AI 추천";
+        botBlock.appendChild(label);
+
+        const lines = data.result.trim().split("\n").filter(l => l.trim());
         lines.forEach(line => {
-          const match = line.match(/^(\d+)\.\s+(.+)/);
+          const match = line.match(/^(\d+)\.\s+(.+?)\s*-\s*(.+)/);
           if (match) {
-            html += `<div class="place-card"><span class="num">${match[1]}.</span>${match[2]}</div>`;
+            const card = document.createElement("div");
+            card.className = "place-card";
+
+            const placeName = match[2].replace(/\[|\]/g, "").trim();
+            const desc = match[3].replace(/\[|\]/g, "").trim();
+            const kakaoUrl = `https://map.kakao.com/link/search/${encodeURIComponent(placeName)}`;
+
+            card.innerHTML = `
+              <div>
+                <span class="num">${match[1]}.</span>
+                <span class="name">${placeName}</span>
+              </div>
+              <div class="desc">${desc}</div>
+              <a class="map-link" href="${kakaoUrl}" target="_blank">🗺️ 카카오맵에서 보기</a>
+            `;
+            botBlock.appendChild(card);
           }
         });
 
-        resultDiv.innerHTML = html;
+        chatArea.appendChild(botBlock);
       } catch (e) {
-        resultDiv.innerHTML = '<p class="error">오류가 발생했습니다. 다시 시도해주세요.</p>';
+        loadingEl.remove();
+        const err = document.createElement("p");
+        err.className = "error-msg";
+        err.textContent = "오류가 발생했습니다. 다시 시도해주세요.";
+        chatArea.appendChild(err);
       } finally {
         btn.disabled = false;
+        chatArea.scrollTop = chatArea.scrollHeight;
+        input.focus();
       }
+    }
+
+    async function clearChat() {
+      await fetch("/clear", { method: "POST" });
+      const chatArea = document.getElementById("chatArea");
+      chatArea.innerHTML = `
+        <div class="empty-state" id="emptyState">
+          <div class="icon">🗺️</div>
+          <p>어디로 갈지 고민되시나요?<br>장소를 검색하면 AI가 추천해드려요!</p>
+          <p style="font-size:12px; color:#ccc;">예: 강남역 근처 카페, 홍대 데이트 코스</p>
+        </div>`;
     }
   </script>
 </body>
