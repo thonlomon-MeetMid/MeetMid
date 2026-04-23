@@ -55,20 +55,9 @@
       font-size: 18px;
     }
 
-    .logo-text {
-      color: white;
-    }
-
-    .logo-text h1 {
-      font-size: 18px;
-      font-weight: 700;
-    }
-
-    .logo-text p {
-      font-size: 11px;
-      opacity: 0.8;
-      margin-top: 1px;
-    }
+    .logo-text { color: white; }
+    .logo-text h1 { font-size: 18px; font-weight: 700; }
+    .logo-text p { font-size: 11px; opacity: 0.8; margin-top: 1px; }
 
     .clear-btn {
       background: rgba(255,255,255,0.2);
@@ -80,7 +69,6 @@
       cursor: pointer;
       transition: background 0.2s;
     }
-
     .clear-btn:hover { background: rgba(255,255,255,0.3); }
 
     /* 채팅 영역 */
@@ -103,7 +91,6 @@
       gap: 12px;
       text-align: center;
     }
-
     .empty-state .icon { font-size: 48px; }
     .empty-state p { font-size: 14px; line-height: 1.6; }
 
@@ -123,7 +110,7 @@
 
     .bubble-bot {
       align-self: flex-start;
-      max-width: 90%;
+      max-width: 95%;
       display: flex;
       flex-direction: column;
       gap: 8px;
@@ -135,51 +122,91 @@
       margin-left: 4px;
     }
 
+    /* 장소 카드 */
     .place-card {
       background: #f8faff;
       border: 1.5px solid #e0eaff;
-      border-radius: 12px;
-      padding: 12px 16px;
+      border-radius: 14px;
+      padding: 14px 16px;
       font-size: 14px;
       color: #222;
       line-height: 1.6;
       transition: border-color 0.2s, box-shadow 0.2s;
     }
-
     .place-card:hover {
       border-color: #4f8ef7;
-      box-shadow: 0 2px 8px rgba(79,142,247,0.1);
+      box-shadow: 0 2px 10px rgba(79,142,247,0.13);
     }
 
-    .place-card .num {
+    .card-header {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .card-num {
       font-weight: 700;
       color: #4f8ef7;
-      margin-right: 4px;
+      font-size: 15px;
+      min-width: 20px;
     }
-
-    .place-card .name {
-      font-weight: 600;
+    .card-name {
+      font-weight: 700;
       color: #1a1a1a;
+      font-size: 15px;
     }
 
-    .place-card .desc {
-      color: #666;
-      font-size: 13px;
-      margin-top: 4px;
-    }
-
-    .map-link {
-      display: inline-flex;
+    .card-address {
+      color: #777;
+      font-size: 12px;
+      margin-bottom: 4px;
+      display: flex;
       align-items: center;
       gap: 4px;
-      margin-top: 6px;
-      font-size: 12px;
-      color: #4f8ef7;
-      text-decoration: none;
-      font-weight: 600;
     }
 
-    .map-link:hover { text-decoration: underline; }
+    .card-rating {
+      font-size: 13px;
+      color: #f5a623;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .card-desc {
+      color: #555;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .map-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 12px;
+      background: #fee500;
+      color: #3c1e1e;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      text-decoration: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+    .map-btn:hover {
+      background: #fdd800;
+      transform: translateY(-1px);
+    }
+
+    /* 에러 메시지 */
+    .error-card {
+      align-self: flex-start;
+      background: #fff4f4;
+      border: 1.5px solid #ffd0d0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: #c0392b;
+      max-width: 90%;
+    }
 
     /* 로딩 */
     .loading-bubble {
@@ -190,14 +217,9 @@
       font-size: 13px;
       color: #888;
     }
-
-    .dots span {
-      animation: blink 1.2s infinite;
-      display: inline-block;
-    }
+    .dots span { animation: blink 1.2s infinite; display: inline-block; }
     .dots span:nth-child(2) { animation-delay: 0.2s; }
     .dots span:nth-child(3) { animation-delay: 0.4s; }
-
     @keyframes blink {
       0%, 80%, 100% { opacity: 0.2; }
       40% { opacity: 1; }
@@ -211,7 +233,6 @@
       gap: 10px;
       background: white;
     }
-
     input[type="text"] {
       flex: 1;
       padding: 12px 16px;
@@ -222,9 +243,7 @@
       transition: border-color 0.2s;
       background: #f8faff;
     }
-
     input[type="text"]:focus { border-color: #4f8ef7; background: white; }
-
     .send-btn {
       padding: 12px 20px;
       background: #4f8ef7;
@@ -237,11 +256,8 @@
       transition: background 0.2s;
       white-space: nowrap;
     }
-
     .send-btn:hover { background: #3a7ae0; }
     .send-btn:disabled { background: #aac4f5; cursor: not-allowed; }
-
-    .error-msg { color: #e05252; font-size: 13px; align-self: center; }
   </style>
 </head>
 <body>
@@ -279,6 +295,22 @@
       if (e.key === "Enter") search();
     });
 
+    // 별점 숫자 → 별 아이콘 문자열로 변환
+    function renderStars(ratingStr) {
+      const rating = parseFloat(ratingStr);
+      if (isNaN(rating)) return ratingStr;
+      const full = Math.floor(rating);
+      const half = (rating - full) >= 0.5;
+      const empty = 5 - full - (half ? 1 : 0);
+      return '⭐'.repeat(full) + (half ? '✨' : '') + '☆'.repeat(empty) + `  ${rating}`;
+    }
+
+    // 카카오맵 링크 생성 (장소명 + 주소)
+    function buildKakaoUrl(name, address) {
+      const q = encodeURIComponent(name + ' ' + address);
+      return `https://map.kakao.com/link/search/${q}`;
+    }
+
     async function search() {
       const input = document.getElementById("query");
       const query = input.value.trim();
@@ -288,7 +320,6 @@
 
       if (!query) return;
 
-      // 빈 상태 제거
       if (emptyState) emptyState.remove();
 
       // 사용자 버블
@@ -317,10 +348,10 @@
         loadingEl.remove();
 
         if (data.error) {
-          const err = document.createElement("p");
-          err.className = "error-msg";
-          err.textContent = data.error;
-          chatArea.appendChild(err);
+          const errCard = document.createElement("div");
+          errCard.className = "error-card";
+          errCard.textContent = data.error;
+          chatArea.appendChild(errCard);
           return;
         }
 
@@ -333,36 +364,55 @@
         label.textContent = "MeetMid AI 추천";
         botBlock.appendChild(label);
 
+        // 형식: 1. [장소명] | [주소] | [별점] | [한 줄 설명]
         const lines = data.result.trim().split("\n").filter(l => l.trim());
+        let hasCard = false;
+
         lines.forEach(line => {
-          const match = line.match(/^(\d+)\.\s+(.+?)\s*-\s*(.+)/);
+          const match = line.match(/^(\d+)\.\s*\[?(.+?)\]?\s*\|\s*\[?(.+?)\]?\s*\|\s*\[?([\d.]+)\]?\s*\|\s*\[?(.+?)\]?\s*$/);
           if (match) {
+            hasCard = true;
+            const num = match[1];
+            const name = match[2].trim();
+            const address = match[3].trim();
+            const rating = match[4].trim();
+            const desc = match[5].trim();
+            const kakaoUrl = buildKakaoUrl(name, address);
+
             const card = document.createElement("div");
             card.className = "place-card";
-
-            const placeName = match[2].replace(/\[|\]/g, "").trim();
-            const desc = match[3].replace(/\[|\]/g, "").trim();
-            const kakaoUrl = `https://map.kakao.com/link/search/${encodeURIComponent(placeName)}`;
-
             card.innerHTML = `
-              <div>
-                <span class="num">${match[1]}.</span>
-                <span class="name">${placeName}</span>
+              <div class="card-header">
+                <span class="card-num">${num}.</span>
+                <span class="card-name">${escapeHtml(name)}</span>
               </div>
-              <div class="desc">${desc}</div>
-              <a class="map-link" href="${kakaoUrl}" target="_blank">🗺️ 카카오맵에서 보기</a>
+              <div class="card-address">📌 ${escapeHtml(address)}</div>
+              <div class="card-rating">${renderStars(rating)}</div>
+              <div class="card-desc">${escapeHtml(desc)}</div>
+              <a class="map-btn" href="${kakaoUrl}" target="_blank" rel="noopener">
+                🗺️ 카카오맵에서 보기
+              </a>
             `;
             botBlock.appendChild(card);
           }
         });
 
+        // 파싱 실패 시 원문 텍스트로 폴백
+        if (!hasCard) {
+          const fallback = document.createElement("div");
+          fallback.className = "place-card";
+          fallback.style.whiteSpace = "pre-wrap";
+          fallback.textContent = data.result;
+          botBlock.appendChild(fallback);
+        }
+
         chatArea.appendChild(botBlock);
       } catch (e) {
         loadingEl.remove();
-        const err = document.createElement("p");
-        err.className = "error-msg";
-        err.textContent = "오류가 발생했습니다. 다시 시도해주세요.";
-        chatArea.appendChild(err);
+        const errCard = document.createElement("div");
+        errCard.className = "error-card";
+        errCard.textContent = "오류가 발생했습니다. 다시 시도해주세요.";
+        chatArea.appendChild(errCard);
       } finally {
         btn.disabled = false;
         chatArea.scrollTop = chatArea.scrollHeight;
@@ -379,6 +429,14 @@
           <p>어디로 갈지 고민되시나요?<br>장소를 검색하면 AI가 추천해드려요!</p>
           <p style="font-size:12px; color:#ccc;">예: 강남역 근처 카페, 홍대 데이트 코스</p>
         </div>`;
+    }
+
+    function escapeHtml(str) {
+      return str
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
     }
   </script>
 </body>
