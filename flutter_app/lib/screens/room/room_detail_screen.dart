@@ -108,7 +108,8 @@ class RoomDetailScreen extends ConsumerWidget {
           context: context,
           builder: (_) => KickConfirmDialog(
             memberName: m.name,
-            onConfirm: () => ref.read(roomListProvider.notifier).removeMember(roomId, m.id),
+            onConfirm: () =>
+                ref.read(roomListProvider.notifier).removeMember(roomId, m.id),
           ),
         ),
         child: Row(
@@ -116,17 +117,50 @@ class RoomDetailScreen extends ConsumerWidget {
             CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.primaryLight,
-              child: Text(m.name[0], style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w600)),
+              child: Text(
+                m.name[0],
+                style: const TextStyle(
+                  color: AppColors.primary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
             const SizedBox(width: 10),
-            Expanded(child: Text(m.name, style: const TextStyle(fontSize: 14, color: AppColors.textDark))),
-            Text(m.departure, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+            Expanded(
+              child: Text(
+                m.name,
+                style: const TextStyle(fontSize: 14, color: AppColors.textDark),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => context.push('/room/$roomId/departure/${m.id}'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    m.departure.isEmpty ? '출발지 입력' : m.departure,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: m.departure.isEmpty
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                      fontWeight: m.departure.isEmpty
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right,
+                      size: 16, color: AppColors.textHint),
+                ],
+              ),
+            ),
           ],
         ),
       ),
     );
   }
-
   Widget _transportTile(Member m) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),

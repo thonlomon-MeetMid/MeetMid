@@ -1,8 +1,11 @@
 import '../models/member.dart';
 import '../models/room.dart';
 import '../models/transport_mode.dart';
+import '../services/api_client.dart';
 
 class RoomRepository {
+  final ApiClient _apiClient = ApiClient();
+
   final List<Room> _rooms = [
     Room(
       id: '1',
@@ -74,6 +77,75 @@ class RoomRepository {
         members: updatedMembers,
         memberCount: updatedMembers.length,
       );
+    }
+  }
+
+  // ✅ 서버에 방 만들기
+  Future<Room?> createRoomOnServer(String roomName) async {
+    try {
+      final data = await _apiClient.createRoom(roomName);
+      final room = Room(
+        id: data['room_id'] as String,
+        name: data['room_name'] as String,
+        memberCount: 0,
+        members: [],
+      );
+      _rooms.add(room);
+      return room;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // ✅ 서버에 방 참여 (출발지 포함)
+  Future<bool> joinRoomOnServer({
+    required String roomId,
+    required String name,
+    required String address,
+    required String transport,
+  }) async {
+    try {
+      final data = await _apiClient.joinRoom(
+        roomId: roomId,
+        name: name,
+        address: address,
+        transport: transport,
+      );
+      // 서버에서 받은 멤버 목록으로 로컬 업데이트
+      if (data['ok'] == true) {
+        final serverMembers = (data['members'] as List).map((m) {
+          return Member(
+            id: m['name'] as String, // 서버에 id 없으면 name 사용
+            name: m['name'] as String,
+            departure: m['address'] as String,
+            transport: TransportMode.values.firstWhere(
+              (t) => t.name == m['transport'],
+              orElse: () => TransportMode.transit,
+            ),
+          );
+        }).toList();
+
+        final index = _rooms.indexWhere((r) => r.id == roomId);
+        if (index != -1) {
+          _rooms[index] = _rooms[index].copyWith(
+            members: serverMembers,
+            memberCount: serverMembers.length,
+          );
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // ✅ 서버에서 중간지점 요청
+  Future<Map<String, dynamic>?> getMidpointFromServer(String roomId) async {
+    try {
+      return await _apiClient.getMidpoint(roomId);
+    } catch (e) {
+      return null;
     }
   }
 }
