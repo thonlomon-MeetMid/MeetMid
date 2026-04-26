@@ -1,3 +1,4 @@
+import '../data/models/transport_mode.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/models/member.dart';
 import '../data/models/room.dart';
@@ -31,4 +32,34 @@ class RoomListNotifier extends StateNotifier<List<Room>> {
   }
 
   Room? getRoomById(String id) => _repo.getRoomById(id);
+
+  void updateMemberDeparture(
+  String roomId,
+  String memberId,
+  String departure,
+  TransportMode transport,
+) {
+  final rooms = state;
+  final roomIndex = rooms.indexWhere((r) => r.id == roomId);
+  if (roomIndex == -1) return;
+
+  final room = rooms[roomIndex];
+  final memberIndex = room.members.indexWhere((m) => m.id == memberId);
+  if (memberIndex == -1) return;
+
+  final updatedMember = room.members[memberIndex].copyWith(
+    departure: departure,
+    transport: transport,
+  );
+
+  final updatedMembers = List<Member>.from(room.members);
+  updatedMembers[memberIndex] = updatedMember;
+
+  final updatedRoom = room.copyWith(members: updatedMembers);
+  final updatedRooms = List<Room>.from(rooms);
+  updatedRooms[roomIndex] = updatedRoom;
+
+  state = updatedRooms;
 }
+}
+

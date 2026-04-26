@@ -11,6 +11,7 @@ import '../screens/main/main_map_screen.dart';
 import '../screens/main/room_list_screen.dart';
 import '../screens/main/settings_screen.dart';
 import '../screens/room/create_room_screen.dart';
+import '../screens/room/departure_input_screen.dart'; // ✅ 추가
 import '../screens/room/room_detail_screen.dart';
 import '../screens/room/search_settings_screen.dart';
 import '../screens/result/search_result_screen.dart';
@@ -90,6 +91,14 @@ final routerProvider = Provider<GoRouter>((ref) {
           roomId: state.pathParameters['roomId']!,
         ),
         routes: [
+          // ✅ 출발지 입력 화면 경로 추가
+          GoRoute(
+            path: 'departure/:memberId',
+            builder: (context, state) => DepartureInputScreen(
+              roomId: state.pathParameters['roomId']!,
+              memberId: state.pathParameters['memberId']!,
+            ),
+          ),
           GoRoute(
             path: 'search-settings',
             builder: (context, state) => SearchSettingsScreen(
