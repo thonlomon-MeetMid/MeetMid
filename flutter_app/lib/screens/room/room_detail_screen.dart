@@ -16,7 +16,10 @@ class RoomDetailScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final rooms = ref.watch(roomListProvider);
+    final rooms = ref.watch(roomListProvider).valueOrNull ?? const [];
+    if (rooms.isEmpty) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
     final room = rooms.firstWhere((r) => r.id == roomId, orElse: () => rooms.first);
 
     return Scaffold(

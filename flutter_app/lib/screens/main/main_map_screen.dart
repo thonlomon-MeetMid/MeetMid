@@ -1,3 +1,5 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
 import 'dart:js' as js;
 import 'dart:ui_web' as ui;
 import 'package:flutter/material.dart';
@@ -51,10 +53,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     ui.platformViewRegistry.registerViewFactory(
       'kakao-map-view',
       (int viewId) {
-        final div = js.context['document'].callMethod('createElement', ['div']) as js.JsObject;
-        div['id'] = 'kakao-map';
-        div['style']['width'] = '100%';
-        div['style']['height'] = '100%';
+        final div = html.document.createElement('div') as html.DivElement;
+        div.id = 'kakao-map';
+        div.style.width = '100%';
+        div.style.height = '100%';
 
         Future.delayed(const Duration(milliseconds: 500), () {
           _initKakaoMap();
@@ -195,7 +197,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final rooms = ref.watch(roomListProvider);
+    final rooms = ref.watch(roomListProvider).valueOrNull ?? const <Room>[];
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(

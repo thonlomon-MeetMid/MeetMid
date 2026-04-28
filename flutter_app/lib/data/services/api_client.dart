@@ -1,7 +1,7 @@
 import 'package:dio/dio.dart';
 
 class ApiClient {
-  static const String baseUrl = 'http://localhost:5000';
+  static const String baseUrl = 'http://127.0.0.1:5000';
 
   late final Dio _dio;
 
@@ -25,6 +25,12 @@ class ApiClient {
       data: {'query': query},
     );
     return response.data['result'] as String;
+  }
+
+  /// 방 목록 GET /rooms
+  Future<List<Map<String, dynamic>>> getRooms() async {
+    final response = await _dio.get('/rooms');
+    return List<Map<String, dynamic>>.from(response.data['rooms'] as List);
   }
 
   /// 방 만들기 POST /room

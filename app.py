@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session
+from flask_cors import CORS
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -16,7 +17,24 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 app = Flask(__name__)
+CORS(app, resources={r"/*": {"origins": "*"}})
 app.secret_key = os.getenv("SECRET_KEY", "meetmid-secret-2026")
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    return response
+
+@app.before_request
+def handle_preflight():
+    if request.method == 'OPTIONS':
+        response = app.make_default_options_response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # 방 데이터 인메모리 저장소
@@ -174,6 +192,19 @@ def clear():
     return jsonify({"ok": True})
 
 
+@app.route("/rooms", methods=["GET"])
+def get_rooms():
+    result = [
+        {
+            "room_id": room_id,
+            "room_name": room_data["room_name"],
+            "members": room_data["members"],
+        }
+        for room_id, room_data in rooms.items()
+    ]
+    return jsonify({"rooms": result})
+
+
 @app.route("/room", methods=["POST"])
 def create_room():
     data = request.json or {}
@@ -246,4 +277,4 @@ def get_midpoint(room_id: str):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host='0.0.0.0', debug=True)

@@ -34,7 +34,8 @@ class _DepartureInputScreenState extends ConsumerState<DepartureInputScreen> {
   void initState() {
     super.initState();
     // 기존 멤버 정보 불러오기
-    final rooms = ref.read(roomListProvider);
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    if (rooms.isEmpty) return;
     final room = rooms.firstWhere(
       (r) => r.id == widget.roomId,
       orElse: () => rooms.first,
