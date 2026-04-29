@@ -10,14 +10,30 @@ import '../../widgets/common/app_header.dart';
 import 'invite_bottom_sheet.dart';
 import 'kick_confirm_dialog.dart';
 
-class RoomDetailScreen extends ConsumerWidget {
+class RoomDetailScreen extends ConsumerStatefulWidget {
   final String roomId;
   const RoomDetailScreen({super.key, required this.roomId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final rooms = ref.watch(roomListProvider);
-    final room = rooms.firstWhere((r) => r.id == roomId, orElse: () => rooms.first);
+  ConsumerState<RoomDetailScreen> createState() => _RoomDetailScreenState();
+}
+
+class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(roomListProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final rooms = ref.watch(roomListProvider).valueOrNull ?? const [];
+    if (rooms.isEmpty) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    final room = rooms.firstWhere((r) => r.id == widget.roomId, orElse: () => rooms.first);
 
     return Scaffold(
       appBar: AppHeader(
@@ -28,7 +44,7 @@ class RoomDetailScreen extends ConsumerWidget {
             onTap: () => showModalBottomSheet(
               context: context,
               isScrollControlled: true,
-              builder: (_) => InviteBottomSheet(roomId: roomId),
+              builder: (_) => InviteBottomSheet(roomId: widget.roomId),
             ),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -43,7 +59,6 @@ class RoomDetailScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          // 멤버 정보 섹션
           Expanded(
             child: ListView(
               children: [
@@ -56,7 +71,6 @@ class RoomDetailScreen extends ConsumerWidget {
             ),
           ),
 
-          // 하단 버튼
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Row(
@@ -74,7 +88,7 @@ class RoomDetailScreen extends ConsumerWidget {
                 Expanded(
                   child: AppButton(
                     text: '장소 공유',
-                    onPressed: () => context.push('/room/$roomId/search-settings'),
+                    onPressed: () => context.push('/room/${widget.roomId}/search-settings'),
                     height: 48,
                   ),
                 ),
@@ -108,7 +122,8 @@ class RoomDetailScreen extends ConsumerWidget {
           context: context,
           builder: (_) => KickConfirmDialog(
             memberName: m.name,
-            onConfirm: () => ref.read(roomListProvider.notifier).removeMember(roomId, m.id),
+            onConfirm: () =>
+                ref.read(roomListProvider.notifier).removeMember(widget.roomId, m.id),
           ),
         ),
         child: Row(
@@ -116,11 +131,44 @@ class RoomDetailScreen extends ConsumerWidget {
             CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.primaryLight,
-              child: Text(m.name[0], style: const TextStyle(color: AppColors.primary, fontSize: 13, fontWeight: FontWeight.w600)),
+              child: Text(
+                m.name[0],
+                style: const TextStyle(
+                  color: AppColors.primary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
             const SizedBox(width: 10),
-            Expanded(child: Text(m.name, style: const TextStyle(fontSize: 14, color: AppColors.textDark))),
-            Text(m.departure, style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+            Expanded(
+              child: Text(
+                m.name,
+                style: const TextStyle(fontSize: 14, color: AppColors.textDark),
+              ),
+            ),
+            GestureDetector(
+              onTap: () => context.push('/room/${widget.roomId}/departure/${m.id}'),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    m.departure.isEmpty ? '출발지 입력' : m.departure,
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: m.departure.isEmpty
+                          ? AppColors.primary
+                          : AppColors.textSecondary,
+                      fontWeight: m.departure.isEmpty
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(Icons.chevron_right, size: 16, color: AppColors.textHint),
+                ],
+              ),
+            ),
           ],
         ),
       ),

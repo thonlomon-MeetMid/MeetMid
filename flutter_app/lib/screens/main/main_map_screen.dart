@@ -1,3 +1,7 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html;
+import 'dart:js' as js;
+import 'dart:ui_web' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -21,6 +25,13 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
   // 현재 위치 상태
   Position? _currentPosition;
   bool _locationLoading = false;
+  bool _mapRegistered = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _registerMapView();
+  }
 
   @override
   void dispose() {
@@ -30,6 +41,74 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
 
   void _closeFab() {
     if (_fabExpanded) setState(() => _fabExpanded = false);
+  }
+
+  // ✅ 카카오맵 HtmlElementView 등록
+
+
+  void _registerMapView() {
+    if (_mapRegistered) return;
+    _mapRegistered = true;
+
+    ui.platformViewRegistry.registerViewFactory(
+      'kakao-map-view',
+      (int viewId) {
+        final div = html.document.createElement('div') as html.DivElement;
+        div.id = 'kakao-map';
+        div.style.width = '100%';
+        div.style.height = '100%';
+
+        Future.delayed(const Duration(milliseconds: 500), () {
+          _initKakaoMap();
+        });
+
+        return div;
+      }
+    );
+  }
+
+  // ✅ 카카오맵 초기화
+  void _initKakaoMap() {
+    try {
+      js.context.callMethod('eval', ['''
+        (function() {
+          var container = document.getElementById('kakao-map');
+          if (!container) return;
+          var options = {
+            center: new kakao.maps.LatLng(37.5665, 126.9780),
+            level: 5
+          };
+          window._kakaoMap = new kakao.maps.Map(container, options);
+        })();
+      ''']);
+    } catch (e) {
+      debugPrint('카카오맵 초기화 오류: $e');
+    }
+  }
+
+  // ✅ 중간지점 마커 표시
+  void _addMidpointMarker(double lat, double lng) {
+    try {
+      js.context.callMethod('eval', ['''
+        (function() {
+          if (!window._kakaoMap) return;
+          var position = new kakao.maps.LatLng($lat, $lng);
+          var marker = new kakao.maps.Marker({
+            position: position,
+            map: window._kakaoMap,
+          });
+          var infowindow = new kakao.maps.InfoWindow({
+            content: '<div style="padding:5px;font-size:12px;">중간지점</div>'
+          });
+          infowindow.open(window._kakaoMap, marker);
+          window._kakaoMap.setCenter(position);
+          if (!window._markers) window._markers = [];
+          window._markers.push(marker);
+        })();
+      ''']);
+    } catch (e) {
+      debugPrint('중간지점 마커 오류: $e');
+      }
   }
 
   // 현재 위치 가져오기
@@ -118,54 +197,14 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final rooms = ref.watch(roomListProvider);
+    final rooms = ref.watch(roomListProvider).valueOrNull ?? const <Room>[];
     final screenHeight = MediaQuery.of(context).size.height;
 
     return Scaffold(
       body: Stack(
         children: [
-          // 지도 플레이스홀더
-          GestureDetector(
-            onTap: _closeFab,
-            child: Container(
-              color: const Color(0xFFE8EDF5),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Icon(Icons.map, size: 64, color: AppColors.border),
-                    const SizedBox(height: 8),
-                    const Text('지도 영역',
-                        style: TextStyle(
-                            fontSize: 16,
-                            color: AppColors.textSecondary,
-                            fontWeight: FontWeight.w600)),
-                    const Text('Google Maps API Key 설정 필요',
-                        style: TextStyle(
-                            fontSize: 12, color: AppColors.textSecondary)),
-                    if (_currentPosition != null) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppColors.primaryLight,
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Text(
-                          '${_currentPosition!.latitude.toStringAsFixed(4)}, ${_currentPosition!.longitude.toStringAsFixed(4)}',
-                          style: const TextStyle(
-                              fontSize: 12,
-                              color: AppColors.primary,
-                              fontWeight: FontWeight.w600),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ),
-          ),
+          // ✅ 카카오맵
+          const HtmlElementView(viewType: 'kakao-map-view'),
 
           // 상단 검색바
           SafeArea(
