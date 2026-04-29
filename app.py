@@ -80,6 +80,7 @@ def get_rooms():
         {
             "room_id": room_id,
             "room_name": room_data["room_name"],
+            "host_id": room_data.get("host_id", ""),
             "members": room_data["members"],
         }
         for room_id, room_data in rooms.items()
@@ -91,12 +92,60 @@ def get_rooms():
 def create_room():
     data = request.json or {}
     room_name = data.get("room_name", "").strip()
+    host_name = data.get("host_name", "").strip()
     if not room_name:
         return jsonify({"error": "room_name이 필요합니다."}), 400
 
     room_id = uuid.uuid4().hex[:6]
-    rooms[room_id] = {"room_name": room_name, "members": []}
-    return jsonify({"room_id": room_id, "room_name": room_name, "members": []})
+    rooms[room_id] = {"room_name": room_name, "host_id": host_name, "members": []}
+    return jsonify({"room_id": room_id, "room_name": room_name, "host_id": host_name, "members": []})
+
+
+@app.route("/room/<room_id>/kick", methods=["POST"])
+def kick_member(room_id: str):
+    if room_id not in rooms:
+        return jsonify({"error": "존재하지 않는 방입니다."}), 404
+
+    data = request.json or {}
+    requester = data.get("requester_name", "").strip()
+    target = data.get("target_name", "").strip()
+
+    if not requester or not target:
+        return jsonify({"error": "requester_name과 target_name이 필요합니다."}), 400
+
+    if rooms[room_id].get("host_id") != requester:
+        return jsonify({"error": "방장만 강퇴할 수 있습니다."}), 403
+
+    original = rooms[room_id]["members"]
+    updated = [m for m in original if m["name"] != target]
+    if len(updated) == len(original):
+        return jsonify({"error": "해당 멤버가 없습니다."}), 404
+
+    rooms[room_id]["members"] = updated
+    return jsonify({"ok": True, "members": updated})
+
+
+@app.route("/room/<room_id>/transfer-host", methods=["POST"])
+def transfer_host(room_id: str):
+    if room_id not in rooms:
+        return jsonify({"error": "존재하지 않는 방입니다."}), 404
+
+    data = request.json or {}
+    requester = data.get("requester_name", "").strip()
+    new_host = data.get("new_host_name", "").strip()
+
+    if not requester or not new_host:
+        return jsonify({"error": "requester_name과 new_host_name이 필요합니다."}), 400
+
+    if rooms[room_id].get("host_id") != requester:
+        return jsonify({"error": "방장만 권한을 양도할 수 있습니다."}), 403
+
+    members = rooms[room_id]["members"]
+    if not any(m["name"] == new_host for m in members):
+        return jsonify({"error": "해당 멤버가 없습니다."}), 404
+
+    rooms[room_id]["host_id"] = new_host
+    return jsonify({"ok": True, "host_id": new_host, "members": members})
 
 
 @app.route("/room/<room_id>/join", methods=["POST"])

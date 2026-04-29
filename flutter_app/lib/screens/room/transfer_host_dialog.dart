@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 
-class KickConfirmDialog extends StatelessWidget {
+class TransferHostDialog extends StatelessWidget {
   final String memberName;
   final VoidCallback onConfirm;
 
-  const KickConfirmDialog({
+  const TransferHostDialog({
     super.key,
     required this.memberName,
     required this.onConfirm,
@@ -20,30 +20,34 @@ class KickConfirmDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 빨간 아이콘
             Container(
               width: 56,
               height: 56,
               decoration: BoxDecoration(
-                color: AppColors.errorLight,
+                color: AppColors.primaryLight,
                 shape: BoxShape.circle,
               ),
-              child: const Icon(Icons.person_remove, color: AppColors.error, size: 28),
+              child: const Text(
+                '👑',
+                style: TextStyle(fontSize: 28),
+                textAlign: TextAlign.center,
+              ),
             ),
             const SizedBox(height: 16),
-
             Text(
-              '$memberName님을 강퇴할까요?',
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textDark),
+              '$memberName님에게 방장을 넘길까요?',
+              style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             const Text(
-              '강퇴하면 이 방에서 나가게 됩니다',
+              '방장 권한이 이전됩니다',
               style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
               textAlign: TextAlign.center,
             ),
-
             const SizedBox(height: 24),
             Row(
               children: [
@@ -52,10 +56,12 @@ class KickConfirmDialog extends StatelessWidget {
                     onPressed: () => Navigator.pop(context),
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(color: AppColors.borderLight),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
                       minimumSize: const Size(0, 46),
                     ),
-                    child: const Text('취소', style: TextStyle(color: AppColors.textSecondary)),
+                    child: const Text('취소',
+                        style: TextStyle(color: AppColors.textSecondary)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -66,12 +72,13 @@ class KickConfirmDialog extends StatelessWidget {
                       Navigator.pop(context);
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.error,
+                      backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10)),
                       minimumSize: const Size(0, 46),
                     ),
-                    child: const Text('강퇴'),
+                    child: const Text('넘기기'),
                   ),
                 ),
               ],

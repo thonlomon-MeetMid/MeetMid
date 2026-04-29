@@ -46,7 +46,6 @@ class RoomRepository {
     }
   }
 
-  // 서버에서 방 목록을 가져와 로컬 캐시(_rooms)에 저장
   Future<List<Room>> fetchRoomsFromServer() async {
     final data = await _apiClient.getRooms();
     final fetched = data.map((d) {
@@ -64,6 +63,7 @@ class RoomRepository {
       return Room(
         id: d['room_id'] as String,
         name: d['room_name'] as String,
+        hostId: (d['host_id'] as String?) ?? '',
         memberCount: serverMembers.length,
         members: serverMembers,
       );
@@ -74,13 +74,13 @@ class RoomRepository {
     return List.unmodifiable(_rooms);
   }
 
-  // 서버에 방 만들기
-  Future<Room?> createRoomOnServer(String roomName) async {
+  Future<Room?> createRoomOnServer(String roomName, {String hostName = ''}) async {
     try {
-      final data = await _apiClient.createRoom(roomName);
+      final data = await _apiClient.createRoom(roomName, hostName: hostName);
       final room = Room(
         id: data['room_id'] as String,
         name: data['room_name'] as String,
+        hostId: (data['host_id'] as String?) ?? hostName,
         memberCount: 0,
         members: [],
       );
@@ -93,7 +93,6 @@ class RoomRepository {
     }
   }
 
-  // 서버에 방 참여 (출발지 포함)
   Future<bool> joinRoomOnServer({
     required String roomId,
     required String name,
@@ -135,7 +134,70 @@ class RoomRepository {
     }
   }
 
-  // 서버에서 중간지점 요청
+  Future<bool> kickMemberOnServer({
+    required String roomId,
+    required String requesterName,
+    required String targetName,
+  }) async {
+    try {
+      final data = await _apiClient.kickMember(
+        roomId: roomId,
+        requesterName: requesterName,
+        targetName: targetName,
+      );
+      if (data['ok'] == true) {
+        final serverMembers = (data['members'] as List).map((m) {
+          return Member(
+            id: m['name'] as String,
+            name: m['name'] as String,
+            departure: m['address'] as String,
+            transport: TransportMode.values.firstWhere(
+              (t) => t.name == m['transport'],
+              orElse: () => TransportMode.transit,
+            ),
+          );
+        }).toList();
+        final index = _rooms.indexWhere((r) => r.id == roomId);
+        if (index != -1) {
+          _rooms[index] = _rooms[index].copyWith(
+            members: serverMembers,
+            memberCount: serverMembers.length,
+          );
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<bool> transferHostOnServer({
+    required String roomId,
+    required String requesterName,
+    required String newHostName,
+  }) async {
+    try {
+      final data = await _apiClient.transferHost(
+        roomId: roomId,
+        requesterName: requesterName,
+        newHostName: newHostName,
+      );
+      if (data['ok'] == true) {
+        final index = _rooms.indexWhere((r) => r.id == roomId);
+        if (index != -1) {
+          _rooms[index] = _rooms[index].copyWith(
+            hostId: data['host_id'] as String,
+          );
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
   Future<Map<String, dynamic>?> getMidpointFromServer(String roomId) async {
     try {
       return await _apiClient.getMidpoint(roomId);

@@ -18,15 +18,6 @@ class ApiClient {
 
   Dio get dio => _dio;
 
-  /// Flask /recommend POST
-  Future<String> recommendPlaces(String query) async {
-    final response = await _dio.post(
-      '/recommend',
-      data: {'query': query},
-    );
-    return response.data['result'] as String;
-  }
-
   /// 방 목록 GET /rooms
   Future<List<Map<String, dynamic>>> getRooms() async {
     final response = await _dio.get('/rooms');
@@ -34,17 +25,15 @@ class ApiClient {
   }
 
   /// 방 만들기 POST /room
-  /// 성공 시 { room_id, room_name, members } 반환
-  Future<Map<String, dynamic>> createRoom(String roomName) async {
+  Future<Map<String, dynamic>> createRoom(String roomName, {String hostName = ''}) async {
     final response = await _dio.post(
       '/room',
-      data: {'room_name': roomName},
+      data: {'room_name': roomName, 'host_name': hostName},
     );
     return response.data as Map<String, dynamic>;
   }
 
   /// 방 참여 POST /room/{roomId}/join
-  /// 성공 시 { ok, members } 반환
   Future<Map<String, dynamic>> joinRoom({
     required String roomId,
     required String name,
@@ -53,17 +42,38 @@ class ApiClient {
   }) async {
     final response = await _dio.post(
       '/room/$roomId/join',
-      data: {
-        'name': name,
-        'address': address,
-        'transport': transport,
-      },
+      data: {'name': name, 'address': address, 'transport': transport},
+    );
+    return response.data as Map<String, dynamic>;
+  }
+
+  /// 멤버 강퇴 POST /room/{roomId}/kick
+  Future<Map<String, dynamic>> kickMember({
+    required String roomId,
+    required String requesterName,
+    required String targetName,
+  }) async {
+    final response = await _dio.post(
+      '/room/$roomId/kick',
+      data: {'requester_name': requesterName, 'target_name': targetName},
+    );
+    return response.data as Map<String, dynamic>;
+  }
+
+  /// 방장 양도 POST /room/{roomId}/transfer-host
+  Future<Map<String, dynamic>> transferHost({
+    required String roomId,
+    required String requesterName,
+    required String newHostName,
+  }) async {
+    final response = await _dio.post(
+      '/room/$roomId/transfer-host',
+      data: {'requester_name': requesterName, 'new_host_name': newHostName},
     );
     return response.data as Map<String, dynamic>;
   }
 
   /// 중간지점 요청 GET /midpoint/{roomId}
-  /// 성공 시 { midpoint: {lat, lng}, address, travel_times } 반환
   Future<Map<String, dynamic>> getMidpoint(String roomId) async {
     final response = await _dio.get('/midpoint/$roomId');
     return response.data as Map<String, dynamic>;
