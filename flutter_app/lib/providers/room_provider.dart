@@ -28,9 +28,19 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
     state = AsyncData(_repo.getRooms());
   }
 
-  void addMember(String roomId, Member member) {
-    _repo.addMemberToRoom(roomId, member);
+  Future<bool> addMember(String roomId, Member member) async {
+    final success = await _repo.joinRoomOnServer(
+      roomId: roomId,
+      name: member.name,
+      address: member.departure,
+      transport: member.transport.name,
+    );
+    if (!success) {
+      // 서버 실패 시 로컬에만 추가
+      _repo.addMemberToRoom(roomId, member);
+    }
     state = AsyncData(_repo.getRooms());
+    return success;
   }
 
   void removeMember(String roomId, String memberId) {

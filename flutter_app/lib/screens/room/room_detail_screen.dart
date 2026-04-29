@@ -10,17 +10,30 @@ import '../../widgets/common/app_header.dart';
 import 'invite_bottom_sheet.dart';
 import 'kick_confirm_dialog.dart';
 
-class RoomDetailScreen extends ConsumerWidget {
+class RoomDetailScreen extends ConsumerStatefulWidget {
   final String roomId;
   const RoomDetailScreen({super.key, required this.roomId});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RoomDetailScreen> createState() => _RoomDetailScreenState();
+}
+
+class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(roomListProvider.notifier).refresh();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final rooms = ref.watch(roomListProvider).valueOrNull ?? const [];
     if (rooms.isEmpty) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final room = rooms.firstWhere((r) => r.id == roomId, orElse: () => rooms.first);
+    final room = rooms.firstWhere((r) => r.id == widget.roomId, orElse: () => rooms.first);
 
     return Scaffold(
       appBar: AppHeader(
@@ -31,7 +44,7 @@ class RoomDetailScreen extends ConsumerWidget {
             onTap: () => showModalBottomSheet(
               context: context,
               isScrollControlled: true,
-              builder: (_) => InviteBottomSheet(roomId: roomId),
+              builder: (_) => InviteBottomSheet(roomId: widget.roomId),
             ),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -46,7 +59,6 @@ class RoomDetailScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          // 멤버 정보 섹션
           Expanded(
             child: ListView(
               children: [
@@ -59,7 +71,6 @@ class RoomDetailScreen extends ConsumerWidget {
             ),
           ),
 
-          // 하단 버튼
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
             child: Row(
@@ -77,7 +88,7 @@ class RoomDetailScreen extends ConsumerWidget {
                 Expanded(
                   child: AppButton(
                     text: '장소 공유',
-                    onPressed: () => context.push('/room/$roomId/search-settings'),
+                    onPressed: () => context.push('/room/${widget.roomId}/search-settings'),
                     height: 48,
                   ),
                 ),
@@ -112,7 +123,7 @@ class RoomDetailScreen extends ConsumerWidget {
           builder: (_) => KickConfirmDialog(
             memberName: m.name,
             onConfirm: () =>
-                ref.read(roomListProvider.notifier).removeMember(roomId, m.id),
+                ref.read(roomListProvider.notifier).removeMember(widget.roomId, m.id),
           ),
         ),
         child: Row(
@@ -137,7 +148,7 @@ class RoomDetailScreen extends ConsumerWidget {
               ),
             ),
             GestureDetector(
-              onTap: () => context.push('/room/$roomId/departure/${m.id}'),
+              onTap: () => context.push('/room/${widget.roomId}/departure/${m.id}'),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
@@ -154,8 +165,7 @@ class RoomDetailScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
-                  const Icon(Icons.chevron_right,
-                      size: 16, color: AppColors.textHint),
+                  const Icon(Icons.chevron_right, size: 16, color: AppColors.textHint),
                 ],
               ),
             ),
@@ -164,6 +174,7 @@ class RoomDetailScreen extends ConsumerWidget {
       ),
     );
   }
+
   Widget _transportTile(Member m) {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),

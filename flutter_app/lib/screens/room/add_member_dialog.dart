@@ -25,15 +25,29 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
     super.dispose();
   }
 
-  void _add() {
+  bool _isLoading = false;
+
+  Future<void> _add() async {
     if (_nameCtrl.text.isEmpty) return;
+    setState(() => _isLoading = true);
+
     final member = Member(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       name: _nameCtrl.text,
       departure: _departureCtrl.text,
       transport: _transport,
     );
-    ref.read(roomListProvider.notifier).addMember(widget.roomId, member);
+    final success = await ref.read(roomListProvider.notifier).addMember(widget.roomId, member);
+
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(success ? '멤버가 추가되었습니다' : '서버 연결 실패 - 로컬에만 저장됩니다'),
+        backgroundColor: success ? null : Colors.orange,
+      ),
+    );
     Navigator.pop(context);
   }
 
@@ -106,13 +120,15 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _add,
+                    onPressed: _isLoading ? null : _add,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
-                    child: const Text('추가'),
+                    child: _isLoading
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Text('추가'),
                   ),
                 ),
               ],
