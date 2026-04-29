@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
-import '../../providers/auth_provider.dart';
+import '../../providers/nickname_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../widgets/common/app_button.dart';
 import '../../widgets/common/app_header.dart';
@@ -33,7 +33,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
     setState(() => _isLoading = true);
 
     try {
-      final hostName = ref.read(authProvider).user?.name ?? '';
+      final hostName = ref.read(nicknameProvider);
       final room = await ref.read(roomListProvider.notifier).createRoom(
             _nameCtrl.text.trim(),
             hostName: hostName,

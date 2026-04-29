@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import '../providers/auth_provider.dart';
+import '../providers/nickname_provider.dart';
+import '../screens/nickname_setup_screen.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/auth/signup_screen.dart';
 import '../screens/auth/find_id_screen.dart';
@@ -11,7 +12,7 @@ import '../screens/main/main_map_screen.dart';
 import '../screens/main/room_list_screen.dart';
 import '../screens/main/settings_screen.dart';
 import '../screens/room/create_room_screen.dart';
-import '../screens/room/departure_input_screen.dart'; // ✅ 추가
+import '../screens/room/departure_input_screen.dart';
 import '../screens/room/room_detail_screen.dart';
 import '../screens/room/search_settings_screen.dart';
 import '../screens/result/search_result_screen.dart';
@@ -22,21 +23,31 @@ final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
 final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authProvider);
+  final nickname = ref.watch(nicknameProvider);
 
   return GoRouter(
     navigatorKey: _rootNavigatorKey,
-    initialLocation: '/auth/login',
+    initialLocation: '/map',
     redirect: (context, state) {
-      final isLoggedIn = authState.isLoggedIn;
-      final isAuthRoute = state.matchedLocation.startsWith('/auth');
+      final hasNickname = nickname.isNotEmpty;
+      final loc = state.matchedLocation;
+      final isNicknameRoute = loc == '/nickname';
+      final isAuthRoute = loc.startsWith('/auth');
 
-      if (!isLoggedIn && !isAuthRoute) return '/auth/login';
-      if (isLoggedIn && isAuthRoute) return '/map';
+      // 닉네임 없으면 설정 화면으로
+      if (!hasNickname && !isNicknameRoute && !isAuthRoute) return '/nickname';
+      // 닉네임 있으면 설정 화면 진입 불가
+      if (hasNickname && isNicknameRoute) return '/map';
       return null;
     },
     routes: [
-      // Auth routes
+      // 닉네임 설정 (임시 로그인 대체)
+      GoRoute(
+        path: '/nickname',
+        builder: (context, state) => const NicknameSetupScreen(),
+      ),
+
+      // Auth routes (기존 유지, 필수 아님)
       GoRoute(
         path: '/auth/login',
         builder: (context, state) => const LoginScreen(),
@@ -91,7 +102,6 @@ final routerProvider = Provider<GoRouter>((ref) {
           roomId: state.pathParameters['roomId']!,
         ),
         routes: [
-          // ✅ 출발지 입력 화면 경로 추가
           GoRoute(
             path: 'departure/:memberId',
             builder: (context, state) => DepartureInputScreen(
