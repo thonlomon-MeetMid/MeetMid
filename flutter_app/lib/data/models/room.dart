@@ -6,6 +6,7 @@ class Room {
   final String? description;
   final int memberCount;
   final List<Member> members;
+  final String hostId;
 
   const Room({
     required this.id,
@@ -13,6 +14,7 @@ class Room {
     this.description,
     required this.memberCount,
     required this.members,
+    this.hostId = '',
   });
 
   Room copyWith({
@@ -21,6 +23,7 @@ class Room {
     String? description,
     int? memberCount,
     List<Member>? members,
+    String? hostId,
   }) {
     return Room(
       id: id ?? this.id,
@@ -28,6 +31,7 @@ class Room {
       description: description ?? this.description,
       memberCount: memberCount ?? this.memberCount,
       members: members ?? this.members,
+      hostId: hostId ?? this.hostId,
     );
   }
 
@@ -40,6 +44,7 @@ class Room {
       members: (json['members'] as List)
           .map((e) => Member.fromJson(e as Map<String, dynamic>))
           .toList(),
+      hostId: (json['hostId'] as String?) ?? '',
     );
   }
 
@@ -49,5 +54,6 @@ class Room {
         'description': description,
         'memberCount': memberCount,
         'members': members.map((e) => e.toJson()).toList(),
+        'hostId': hostId,
       };
 }

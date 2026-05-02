@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
-import '../../data/repositories/room_repository.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../widgets/common/app_button.dart';
 import '../../widgets/common/app_header.dart';
@@ -33,31 +33,21 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // ✅ 서버에 방 만들기 요청
-      final repo = RoomRepository();
-      final room = await repo.createRoomOnServer(_nameCtrl.text.trim());
+      final user = ref.read(authProvider).user;
+      final room = await ref.read(roomListProvider.notifier).createRoom(
+            _nameCtrl.text.trim(),
+            hostName: user?.name ?? '',
+            hostUuid: user?.id ?? '',
+          );
 
-      if (room != null) {
-        // 서버 성공 → 로컬에도 추가
-        ref.read(roomListProvider.notifier).addRoom(room);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('방이 만들어졌습니다!')),
-          );
-          context.pop();
-        }
-      } else {
-        // 서버 실패 → 로컬에만 저장
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('서버 연결 실패 - 로컬에만 저장됩니다'),
-              backgroundColor: Colors.orange,
-            ),
-          );
-          context.pop();
-        }
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(room != null ? '방이 만들어졌습니다!' : '서버 연결 실패 - 로컬에만 저장됩니다'),
+          backgroundColor: room != null ? null : Colors.orange,
+        ),
+      );
+      context.pop();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flutter Web",
+      "type": "dart",
+      "request": "launch",
+      "program": "flutter_app/lib/main.dart",
+      "args": [
+        "-d",
+        "chrome",
+        "--web-port=8080"
+      ]
+    }
+  ]
+}

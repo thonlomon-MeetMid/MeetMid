@@ -18,6 +18,7 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
   <meta name="description" content="A new Flutter project.">
 
   <!-- iOS meta tags & icons -->
@@ -31,12 +32,145 @@
 
   <title>meetmid_flutter</title>
   <link rel="manifest" href="manifest.json">
-  <!-- ✅ 카카오맵 JavaScript SDK (키 받으면 YOUR_JAVASCRIPT_KEY 부분 교체) -->
+  <!-- Kakao SDK가 추가하는 스크립트의 HTTP URL을 HTTPS로 업그레이드 (t1.daumcdn.net은 HTTP 거부) -->
+  <script>
+    (function () {
+      // MutationObserver: DOM에 추가되는 script 노드의 src를 HTTPS로 교체
+      var _observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          mutation.addedNodes.forEach(function (node) {
+            if (node.tagName === 'SCRIPT') {
+              var s = node.getAttribute('src');
+              if (s && s.startsWith('http://t1.daumcdn.net')) {
+                var upgraded = s.replace('http://', 'https://');
+                console.log('[KakaoMap] HTTPS 업그레이드 (MutationObserver):', upgraded);
+                node.setAttribute('src', upgraded);
+              }
+            }
+          });
+        });
+      });
+      _observer.observe(document.documentElement, { childList: true, subtree: true });
+    })();
+  </script>
+  <!-- 카카오맵 JavaScript SDK: autoload=false로 kakao 객체를 동기적으로 정의 -->
   <script type="text/javascript"
-    src="//dapi.kakao.com/v2/maps/sdk.js?appkey=YOUR_JAVASCRIPT_KEY">
+    src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=04a8f8db7bad0830a64e1ec052d0bfa7&autoload=false">
+  </script>
+  <script>
+    window._kakaoMap = null;
+    window._kakaoMapReady = false;
+    window._kakaoMapCancelled = false;
+    window._kakaoMapsModuleReady = false;
+    window._kakaoMapPendingCreate = null;
+
+    console.log('[KakaoMap] kakao 객체:', typeof kakao);
+
+    // SDK가 동기 로드되면 즉시 maps 모듈 초기화, 아직 undefined면 100ms 간격으로 재시도
+    function _tryInitKakaoMaps() {
+      if (typeof kakao === 'undefined') {
+        console.log('[KakaoMap] kakao 아직 undefined, 재시도 중...');
+        setTimeout(_tryInitKakaoMaps, 100);
+        return;
+      }
+      console.log('[KakaoMap] kakao 객체 확인됨, maps 모듈 로드 시작');
+      kakao.maps.load(function () {
+        window._kakaoMapsModuleReady = true;
+        console.log('[KakaoMap] kakao.maps 모듈 로드 완료');
+        if (window._kakaoMapPendingCreate) {
+          window._kakaoMapPendingCreate();
+          window._kakaoMapPendingCreate = null;
+        }
+      });
+    }
+    _tryInitKakaoMaps();
+
+    function flutterCreateKakaoMapInBody(lat, lng) {
+      window._kakaoMapCancelled = true;
+      window._kakaoMapPendingCreate = null;
+
+      var existing = document.getElementById('_flutter_kakao_map');
+      if (existing) existing.remove();
+
+      var div = document.createElement('div');
+      div.id = '_flutter_kakao_map';
+      div.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:0;';
+      document.body.insertBefore(div, document.body.firstChild);
+
+      window._kakaoMapReady = false;
+      window._kakaoMapCancelled = false;
+      console.log('[KakaoMap] 지도 div 생성됨, maps 모듈 준비:', window._kakaoMapsModuleReady);
+
+      function createMap() {
+        if (window._kakaoMapCancelled) return;
+        try {
+          window._kakaoMap = new kakao.maps.Map(div, {
+            center: new kakao.maps.LatLng(lat || 37.5665, lng || 126.9780),
+            level: 5
+          });
+          window._kakaoMapReady = true;
+          console.log('[KakaoMap] 지도 생성 성공');
+          setTimeout(function () {
+            if (window._kakaoMap) window._kakaoMap.relayout();
+          }, 300);
+        } catch (e) {
+          console.error('[KakaoMap] 초기화 실패:', e);
+        }
+      }
+
+      if (window._kakaoMapsModuleReady) {
+        createMap();
+      } else {
+        console.log('[KakaoMap] maps 모듈 로드 대기 중...');
+        window._kakaoMapPendingCreate = createMap;
+      }
+    }
+
+    function flutterDestroyKakaoMap() {
+      window._kakaoMapCancelled = true;
+      window._kakaoMapPendingCreate = null;
+      var div = document.getElementById('_flutter_kakao_map');
+      if (div) div.remove();
+      window._kakaoMap = null;
+      window._kakaoMapReady = false;
+      console.log('[KakaoMap] 지도 제거됨');
+    }
+
+    function flutterMoveMap(lat, lng, level) {
+      if (!window._kakaoMap) return;
+      window._kakaoMap.setCenter(new kakao.maps.LatLng(lat, lng));
+      if (level) window._kakaoMap.setLevel(level);
+    }
+
+    function flutterAddMarker(lat, lng, label) {
+      if (!window._kakaoMap) return;
+      var pos = new kakao.maps.LatLng(lat, lng);
+      var marker = new kakao.maps.Marker({ position: pos, map: window._kakaoMap });
+      if (label) {
+        var info = new kakao.maps.InfoWindow({
+          content: '<div style="padding:5px 8px;font-size:12px;white-space:nowrap;color:#333;">' + label + '</div>'
+        });
+        info.open(window._kakaoMap, marker);
+      }
+      if (!window._kakaoMarkers) window._kakaoMarkers = [];
+      window._kakaoMarkers.push(marker);
+    }
+
+    function flutterClearMarkers() {
+      (window._kakaoMarkers || []).forEach(function (m) { m.setMap(null); });
+      window._kakaoMarkers = [];
+    }
   </script>
 
   <style>
+    html, body {
+      background: transparent !important;
+      margin: 0;
+      padding: 0;
+    }
+    flt-glass-pane {
+      background: transparent !important;
+    }
     #kakao-map {
       width: 100%;
       height: 100%;

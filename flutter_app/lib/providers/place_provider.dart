@@ -5,9 +5,7 @@ import '../data/services/api_client.dart';
 
 final apiClientProvider = Provider((ref) => ApiClient());
 
-final placeRepositoryProvider = Provider((ref) {
-  return PlaceRepository(ref.read(apiClientProvider));
-});
+final placeRepositoryProvider = Provider((ref) => PlaceRepository());
 
 final placeRecommendProvider =
     FutureProvider.family<List<Place>, String>((ref, query) async {

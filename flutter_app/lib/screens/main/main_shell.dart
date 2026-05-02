@@ -16,6 +16,7 @@ class MainShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: child,
       bottomNavigationBar: NavigationBar(
         selectedIndex: _currentIndex(context),

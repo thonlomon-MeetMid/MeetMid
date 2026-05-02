@@ -14,24 +14,27 @@ class LoginScreen extends ConsumerStatefulWidget {
 }
 
 class _LoginScreenState extends ConsumerState<LoginScreen> {
-  final _idController = TextEditingController();
-  final _pwController = TextEditingController();
+  final _usernameCtrl = TextEditingController();
+  final _pwCtrl = TextEditingController();
+  final _usernameFocus = FocusNode();
+  final _pwFocus = FocusNode();
 
   @override
   void dispose() {
-    _idController.dispose();
-    _pwController.dispose();
+    _usernameCtrl.dispose();
+    _pwCtrl.dispose();
+    _usernameFocus.dispose();
+    _pwFocus.dispose();
     super.dispose();
   }
 
-  void _handleLogin() async {
+  Future<void> _handleLogin() async {
+    if (_usernameCtrl.text.trim().isEmpty || _pwCtrl.text.isEmpty) return;
     final success = await ref.read(authProvider.notifier).login(
-          _idController.text,
-          _pwController.text,
+          _usernameCtrl.text.trim(),
+          _pwCtrl.text,
         );
-    if (success && mounted) {
-      context.go('/map');
-    }
+    if (success && mounted) context.go('/map');
   }
 
   @override
@@ -47,7 +50,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             children: [
               const SizedBox(height: 80),
 
-              // 로고 아이콘
               Container(
                 width: 72,
                 height: 72,
@@ -59,7 +61,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               ),
               const SizedBox(height: 16),
 
-              // 앱 이름
               const Text(
                 'MeetMid',
                 style: TextStyle(
@@ -76,23 +77,35 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 48),
 
-              // 입력 필드
               AppTextField(
                 label: '아이디',
                 hint: '아이디를 입력하세요',
-                controller: _idController,
+                controller: _usernameCtrl,
+                focusNode: _usernameFocus,
+                textInputAction: TextInputAction.next,
+                onSubmitted: (_) => _pwFocus.requestFocus(),
               ),
               const SizedBox(height: 16),
               AppTextField(
                 label: '비밀번호',
                 hint: '비밀번호를 입력하세요',
-                controller: _pwController,
+                controller: _pwCtrl,
+                focusNode: _pwFocus,
                 obscureText: true,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) => _handleLogin(),
               ),
+
+              if (authState.errorMessage != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  authState.errorMessage!,
+                  style: const TextStyle(fontSize: 13, color: AppColors.error),
+                ),
+              ],
 
               const SizedBox(height: 24),
 
-              // 로그인 버튼
               AppButton(
                 text: '로그인',
                 onPressed: _handleLogin,
@@ -101,7 +114,6 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
               const SizedBox(height: 24),
 
-              // 하단 링크
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -136,11 +148,5 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     );
   }
 
-  Widget _divider() {
-    return Container(
-      width: 1,
-      height: 12,
-      color: AppColors.border,
-    );
-  }
+  Widget _divider() => Container(width: 1, height: 12, color: AppColors.border);
 }

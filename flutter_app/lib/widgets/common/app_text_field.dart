@@ -7,6 +7,10 @@ class AppTextField extends StatelessWidget {
   final TextEditingController? controller;
   final bool obscureText;
   final TextInputType? keyboardType;
+  final TextInputAction? textInputAction;
+  final FocusNode? focusNode;
+  final ValueChanged<String>? onSubmitted;
+  final ValueChanged<String>? onChanged;
   final Widget? prefixIcon;
   final Widget? suffixIcon;
 
@@ -17,6 +21,10 @@ class AppTextField extends StatelessWidget {
     this.controller,
     this.obscureText = false,
     this.keyboardType,
+    this.textInputAction,
+    this.focusNode,
+    this.onSubmitted,
+    this.onChanged,
     this.prefixIcon,
     this.suffixIcon,
   });
@@ -42,6 +50,10 @@ class AppTextField extends StatelessWidget {
           controller: controller,
           obscureText: obscureText,
           keyboardType: keyboardType,
+          textInputAction: textInputAction,
+          focusNode: focusNode,
+          onSubmitted: onSubmitted,
+          onChanged: onChanged,
           style: const TextStyle(fontSize: 14, color: AppColors.textDark),
           decoration: InputDecoration(
             hintText: hint,

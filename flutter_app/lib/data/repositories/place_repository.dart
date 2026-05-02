@@ -1,44 +1,8 @@
 import '../models/place.dart';
-import '../services/api_client.dart';
 
 class PlaceRepository {
-  final ApiClient _apiClient;
-
-  PlaceRepository(this._apiClient);
-
-  /// Gemini AI를 통한 장소 추천 (Flask 백엔드 연동)
   Future<List<Place>> recommendPlaces(String query) async {
-    try {
-      final result = await _apiClient.recommendPlaces(query);
-      return _parseRecommendation(result);
-    } catch (_) {
-      // 오프라인 또는 에러 시 더미 데이터 반환
-      return _dummyPlaces();
-    }
-  }
-
-  List<Place> _parseRecommendation(String text) {
-    final lines = text.split('\n').where((l) => l.trim().isNotEmpty).toList();
-    final places = <Place>[];
-
-    for (int i = 0; i < lines.length && i < 3; i++) {
-      final line = lines[i].replaceFirst(RegExp(r'^\d+\.\s*'), '');
-      final parts = line.split(' - ');
-      final name = parts.isNotEmpty ? parts[0].trim() : '추천 장소 ${i + 1}';
-      final desc = parts.length > 1 ? parts[1].trim() : '';
-
-      places.add(Place(
-        id: '${i + 1}',
-        name: name,
-        category: '카페',
-        distance: '${(i + 1) * 300}m',
-        address: desc,
-        rating: 4.0 + (i * 0.3),
-        aiRecommended: true,
-      ));
-    }
-
-    return places;
+    return _dummyPlaces();
   }
 
   List<Place> _dummyPlaces() => [
