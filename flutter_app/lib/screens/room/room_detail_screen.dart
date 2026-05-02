@@ -4,7 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/models/member.dart';
 import '../../data/models/transport_mode.dart';
-import '../../providers/nickname_provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../widgets/common/app_button.dart';
 import '../../widgets/common/app_header.dart';
@@ -36,7 +36,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final room = rooms.firstWhere((r) => r.id == widget.roomId, orElse: () => rooms.first);
-    final currentUserName = ref.watch(nicknameProvider);
+    final currentUserName = ref.watch(authProvider).user?.name ?? '';
     final isHost = room.hostId.isNotEmpty && room.hostId == currentUserName;
 
     return Scaffold(
@@ -290,7 +290,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
   }
 
   Future<void> _kickMember(WidgetRef ref, String targetName) async {
-    final currentUserName = ref.read(nicknameProvider);
+    final currentUserName = ref.read(authProvider).user?.name ?? '';
     final success = await ref.read(roomListProvider.notifier).kickMember(
           roomId: widget.roomId,
           requesterName: currentUserName,
@@ -307,7 +307,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
   }
 
   Future<void> _transferHost(WidgetRef ref, String newHostName) async {
-    final currentUserName = ref.read(nicknameProvider);
+    final currentUserName = ref.read(authProvider).user?.name ?? '';
     final success = await ref.read(roomListProvider.notifier).transferHost(
           roomId: widget.roomId,
           requesterName: currentUserName,

@@ -46,8 +46,8 @@ class RoomRepository {
     }
   }
 
-  Future<List<Room>> fetchRoomsFromServer() async {
-    final data = await _apiClient.getRooms();
+  Future<List<Room>> fetchRoomsFromServer({String userId = ''}) async {
+    final data = await _apiClient.getRooms(userId: userId);
     final fetched = data.map((d) {
       final serverMembers = (d['members'] as List<dynamic>).map((m) {
         return Member(
@@ -74,9 +74,17 @@ class RoomRepository {
     return List.unmodifiable(_rooms);
   }
 
-  Future<Room?> createRoomOnServer(String roomName, {String hostName = ''}) async {
+  Future<Room?> createRoomOnServer(
+    String roomName, {
+    String hostName = '',
+    String hostUuid = '',
+  }) async {
     try {
-      final data = await _apiClient.createRoom(roomName, hostName: hostName);
+      final data = await _apiClient.createRoom(
+        roomName,
+        hostName: hostName,
+        hostUuid: hostUuid,
+      );
       final room = Room(
         id: data['room_id'] as String,
         name: data['room_name'] as String,

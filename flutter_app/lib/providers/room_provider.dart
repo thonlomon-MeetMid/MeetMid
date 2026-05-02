@@ -3,6 +3,7 @@ import '../data/models/member.dart';
 import '../data/models/room.dart';
 import '../data/models/transport_mode.dart';
 import '../data/repositories/room_repository.dart';
+import 'auth_provider.dart';
 
 final roomRepositoryProvider = Provider((ref) => RoomRepository());
 
@@ -15,12 +16,14 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
   @override
   Future<List<Room>> build() async {
     _repo = ref.read(roomRepositoryProvider);
-    return _repo.fetchRoomsFromServer();
+    final userId = ref.read(authProvider).user?.id ?? '';
+    return _repo.fetchRoomsFromServer(userId: userId);
   }
 
   Future<void> refresh() async {
     state = const AsyncLoading();
-    state = await AsyncValue.guard(() => _repo.fetchRoomsFromServer());
+    final userId = ref.read(authProvider).user?.id ?? '';
+    state = await AsyncValue.guard(() => _repo.fetchRoomsFromServer(userId: userId));
   }
 
   void addRoom(Room room) {
@@ -29,8 +32,16 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
   }
 
   /// 서버에 방 생성 후 로컬 추가. 성공 시 Room 반환, 실패 시 null.
-  Future<Room?> createRoom(String roomName, {String hostName = ''}) async {
-    final room = await _repo.createRoomOnServer(roomName, hostName: hostName);
+  Future<Room?> createRoom(
+    String roomName, {
+    String hostName = '',
+    String hostUuid = '',
+  }) async {
+    final room = await _repo.createRoomOnServer(
+      roomName,
+      hostName: hostName,
+      hostUuid: hostUuid,
+    );
     if (room != null) {
       state = AsyncData(_repo.getRooms());
     }

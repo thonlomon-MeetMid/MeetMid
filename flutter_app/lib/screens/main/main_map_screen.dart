@@ -1,7 +1,5 @@
 // ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html;
 import 'dart:js' as js;
-import 'dart:ui_web' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -9,6 +7,10 @@ import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../providers/room_provider.dart';
 import '../../data/models/room.dart';
+
+// 기본 위치: 인하대역
+const _kDefaultLat = 37.4508;
+const _kDefaultLng = 126.6573;
 
 class MainMapScreen extends ConsumerStatefulWidget {
   const MainMapScreen({super.key});
@@ -22,177 +24,157 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
 
-  // 현재 위치 상태
   Position? _currentPosition;
   bool _locationLoading = false;
-  bool _mapRegistered = false;
+  bool _mapLoading = true;
+  bool _mapInitStarted = false;
 
   @override
   void initState() {
     super.initState();
-    _registerMapView();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _startMapInit());
   }
 
   @override
   void dispose() {
+    try {
+      js.context.callMethod('flutterDestroyKakaoMap', []);
+    } catch (_) {}
     _sheetController.dispose();
     super.dispose();
   }
 
-  void _closeFab() {
-    if (_fabExpanded) setState(() => _fabExpanded = false);
-  }
-
-  // ✅ 카카오맵 HtmlElementView 등록
-
-
-  void _registerMapView() {
-    if (_mapRegistered) return;
-    _mapRegistered = true;
-
-    ui.platformViewRegistry.registerViewFactory(
-      'kakao-map-view',
-      (int viewId) {
-        final div = html.document.createElement('div') as html.DivElement;
-        div.id = 'kakao-map';
-        div.style.width = '100%';
-        div.style.height = '100%';
-
-        Future.delayed(const Duration(milliseconds: 500), () {
-          _initKakaoMap();
-        });
-
-        return div;
+  void _startMapInit() {
+    if (_mapInitStarted) return;
+    _mapInitStarted = true;
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) {
+        _initKakaoMap();
+        _pollMapReady();
       }
-    );
+    });
   }
 
-  // ✅ 카카오맵 초기화
+  Future<void> _pollMapReady() async {
+    for (int i = 0; i < 25; i++) {
+      await Future.delayed(const Duration(milliseconds: 200));
+      if (!mounted) return;
+      if (js.context['_kakaoMapReady'] == true) {
+        setState(() => _mapLoading = false);
+        _tryAutoLocation();
+        return;
+      }
+    }
+    if (mounted) setState(() => _mapLoading = false);
+  }
+
   void _initKakaoMap() {
     try {
-      js.context.callMethod('eval', ['''
-        (function() {
-          var container = document.getElementById('kakao-map');
-          if (!container) return;
-          var options = {
-            center: new kakao.maps.LatLng(37.5665, 126.9780),
-            level: 5
-          };
-          window._kakaoMap = new kakao.maps.Map(container, options);
-        })();
-      ''']);
+      js.context.callMethod('flutterCreateKakaoMapInBody', [_kDefaultLat, _kDefaultLng]);
     } catch (e) {
       debugPrint('카카오맵 초기화 오류: $e');
+      if (mounted) setState(() => _mapLoading = false);
     }
   }
 
-  // ✅ 중간지점 마커 표시
-  void _addMidpointMarker(double lat, double lng) {
+  void _moveMapTo(double lat, double lng, {int level = 3}) {
     try {
-      js.context.callMethod('eval', ['''
-        (function() {
-          if (!window._kakaoMap) return;
-          var position = new kakao.maps.LatLng($lat, $lng);
-          var marker = new kakao.maps.Marker({
-            position: position,
-            map: window._kakaoMap,
-          });
-          var infowindow = new kakao.maps.InfoWindow({
-            content: '<div style="padding:5px;font-size:12px;">중간지점</div>'
-          });
-          infowindow.open(window._kakaoMap, marker);
-          window._kakaoMap.setCenter(position);
-          if (!window._markers) window._markers = [];
-          window._markers.push(marker);
-        })();
-      ''']);
+      js.context.callMethod('flutterMoveMap', [lat, lng, level]);
     } catch (e) {
-      debugPrint('중간지점 마커 오류: $e');
-      }
+      debugPrint('지도 이동 오류: $e');
+    }
   }
 
-  // 현재 위치 가져오기
-  Future<void> _getCurrentLocation() async {
-    setState(() {
-      _locationLoading = true;
-    });
-
+  void _addMidpointMarker(double lat, double lng) {
     try {
-      // 위치 서비스 활성화 확인
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      js.context.callMethod('flutterClearMarkers', []);
+      js.context.callMethod('flutterAddMarker', [lat, lng, '중간지점']);
+      _moveMapTo(lat, lng, level: 5);
+    } catch (e) {
+      debugPrint('중간지점 마커 오류: $e');
+    }
+  }
+
+  Future<void> _tryAutoLocation() async {
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) return;
+
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) return;
+
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      if (mounted) {
+        setState(() => _currentPosition = position);
+        _moveMapTo(position.latitude, position.longitude);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _getCurrentLocation() async {
+    setState(() => _locationLoading = true);
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        setState(() {
-          _locationLoading = false;
-        });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('위치 서비스를 켜주세요')),
-          );
+              const SnackBar(content: Text('위치 서비스를 켜주세요')));
         }
         return;
       }
 
-      // 권한 확인
-      LocationPermission permission = await Geolocator.checkPermission();
+      var permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
-          setState(() {
-            _locationLoading = false;
-          });
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('위치 권한을 허용해주세요')),
-            );
+                const SnackBar(content: Text('위치 권한을 허용해주세요')));
           }
           return;
         }
       }
-
       if (permission == LocationPermission.deniedForever) {
-        setState(() {
-          _locationLoading = false;
-        });
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')),
-          );
+              const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')));
         }
         return;
       }
 
-      // 위치 가져오기
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
       );
-
-      setState(() {
-        _currentPosition = position;
-        _locationLoading = false;
-      });
-
+      if (mounted) {
+        setState(() {
+          _currentPosition = position;
+          _locationLoading = false;
+        });
+        _moveMapTo(position.latitude, position.longitude);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(
+              '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'),
+          duration: const Duration(seconds: 2),
+        ));
+      }
+    } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
+            const SnackBar(content: Text('위치를 가져올 수 없습니다')));
       }
-    } catch (e) {
-      setState(() {
-        _locationLoading = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('위치를 가져올 수 없습니다')),
-        );
-      }
+    } finally {
+      if (mounted) setState(() => _locationLoading = false);
     }
+  }
+
+  void _closeFab() {
+    if (_fabExpanded) setState(() => _fabExpanded = false);
   }
 
   @override
@@ -200,11 +182,32 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     final rooms = ref.watch(roomListProvider).valueOrNull ?? const <Room>[];
     final screenHeight = MediaQuery.of(context).size.height;
 
+    // Scaffold를 투명하게 설정 → 지도 div가 Flutter 캔버스 뒤로 비쳐 보임
     return Scaffold(
+      backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-          // ✅ 카카오맵
-          const HtmlElementView(viewType: 'kakao-map-view'),
+          // 지도 로딩 인디케이터 (지도 준비 전 흰 배경으로 DOM div 가림)
+          if (_mapLoading)
+            Positioned.fill(
+              child: Container(
+                color: Colors.white,
+                child: const Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: AppColors.primary),
+                      SizedBox(height: 12),
+                      Text(
+                        '지도 불러오는 중...',
+                        style: TextStyle(
+                            fontSize: 13, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
 
           // 상단 검색바
           SafeArea(
@@ -219,9 +222,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: GestureDetector(
-                      onTap: () {
-                        _closeFab();
-                      },
+                      onTap: _closeFab,
                       child: Container(
                         height: 40,
                         decoration: BoxDecoration(
@@ -254,24 +255,20 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
             ),
           ),
 
-          // 내 위치 버튼 + FAB — 시트 위치에 따라 이동
+          // 내 위치 버튼 + FAB
           ListenableBuilder(
             listenable: _sheetController,
-            builder: (context, _) {
-              // 시트의 현재 높이 (픽셀)
+            builder: (context, child) {
               double sheetPixels;
               try {
                 sheetPixels = _sheetController.pixels;
               } catch (_) {
-                // 컨트롤러가 아직 attach 안 된 경우
                 sheetPixels = screenHeight * 0.22;
               }
-
               final buttonBottom = sheetPixels + 16;
 
               return Stack(
                 children: [
-                  // FAB 메뉴 (펼침 상태)
                   if (_fabExpanded) ...[
                     Positioned.fill(
                       child: GestureDetector(
@@ -292,20 +289,19 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                             context.push('/room/create');
                           }),
                           const SizedBox(height: 8),
-                          _fabMenuItem('초대 참여', Icons.link, () {
+                          _fabMenuItem('방 찾기', Icons.search, () {
                             _closeFab();
+                            context.push('/room/find');
                           }),
                           const SizedBox(height: 8),
-                          _fabMenuItem('방 목록', Icons.list, () {
+                          _fabMenuItem('초대 참여', Icons.link, () {
                             _closeFab();
-                            context.go('/rooms');
                           }),
                         ],
                       ),
                     ),
                   ],
 
-                  // 내 위치 버튼 (왼쪽)
                   Positioned(
                     left: 16,
                     bottom: buttonBottom,
@@ -323,7 +319,6 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                     ),
                   ),
 
-                  // FAB (오른쪽, 같은 높이)
                   Positioned(
                     right: 20,
                     bottom: buttonBottom,
@@ -338,8 +333,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                           borderRadius: BorderRadius.circular(24),
                           boxShadow: [
                             BoxShadow(
-                                color:
-                                    AppColors.primary.withValues(alpha: 0.4),
+                                color: AppColors.primary.withValues(alpha: 0.4),
                                 blurRadius: 12,
                                 offset: const Offset(0, 4)),
                           ],
@@ -381,7 +375,6 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                 child: CustomScrollView(
                   controller: scrollController,
                   slivers: [
-                    // 드래그 핸들 + 제목
                     SliverToBoxAdapter(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -420,8 +413,6 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                         ],
                       ),
                     ),
-
-                    // 방이 없을 때
                     if (rooms.isEmpty)
                       SliverFillRemaining(
                         hasScrollBody: false,
@@ -462,13 +453,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                         padding: const EdgeInsets.symmetric(horizontal: 16),
                         sliver: SliverList(
                           delegate: SliverChildBuilderDelegate(
-                            (context, i) {
-                              final room = rooms[i];
-                              return Padding(
-                                padding: const EdgeInsets.only(bottom: 10),
-                                child: _roomCard(room),
-                              );
-                            },
+                            (context, i) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: _roomCard(rooms[i]),
+                            ),
                             childCount: rooms.length,
                           ),
                         ),
@@ -502,8 +490,8 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                 color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(21),
               ),
-              child: const Icon(Icons.people,
-                  color: AppColors.primary, size: 20),
+              child:
+                  const Icon(Icons.people, color: AppColors.primary, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
