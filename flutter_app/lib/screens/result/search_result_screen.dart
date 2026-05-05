@@ -1,11 +1,15 @@
 // ignore: avoid_web_libraries_in_flutter
+import 'dart:async';
+import 'dart:convert';
 import 'dart:js' as js;
 import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/services/api_client.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/common/app_header.dart';
@@ -28,6 +32,11 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   Map<String, int> _memberMinutes = {};
   Offset? _lastFocalPoint;
 
+  // 실시간 위치 공유
+  bool _locationShared = false;
+  Timer? _locationUpdateTimer;
+  Timer? _locationPollTimer;
+
   @override
   void initState() {
     super.initState();
@@ -36,10 +45,92 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
   @override
   void dispose() {
+    _locationUpdateTimer?.cancel();
+    _locationPollTimer?.cancel();
+    // 화면 떠날 때 위치 공유 해제
+    if (_locationShared) {
+      final user = ref.read(authProvider).user;
+      _api.updateLocation(
+        roomId: widget.roomId,
+        memberName: user?.name ?? '',
+        lat: 0, lng: 0,
+        shared: false,
+      );
+    }
     try {
       js.context.callMethod('flutterDestroyKakaoMap', []);
     } catch (_) {}
     super.dispose();
+  }
+
+  // ── 실시간 위치 공유 ──────────────────────────────────────────
+
+  Future<void> _toggleLocation(bool value) async {
+    if (value) {
+      // 권한 확인
+      LocationPermission perm = await Geolocator.checkPermission();
+      if (perm == LocationPermission.denied) {
+        perm = await Geolocator.requestPermission();
+      }
+      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('위치 권한을 허용해주세요')),
+          );
+        }
+        return;
+      }
+      setState(() => _locationShared = true);
+      // 위치 전송 후 즉시 지도 반영
+      await _sendMyLocation();
+      await _refreshLiveLocations();
+      // 8초마다 내 위치 갱신, 2초마다 전체 폴링
+      _locationUpdateTimer = Timer.periodic(
+        const Duration(seconds: 8), (_) => _sendMyLocation(),
+      );
+      _locationPollTimer = Timer.periodic(
+        const Duration(seconds: 2), (_) => _refreshLiveLocations(),
+      );
+    } else {
+      setState(() => _locationShared = false);
+      _locationUpdateTimer?.cancel();
+      _locationPollTimer?.cancel();
+      final user = ref.read(authProvider).user;
+      await _api.updateLocation(
+        roomId: widget.roomId,
+        memberName: user?.name ?? '',
+        lat: 0, lng: 0,
+        shared: false,
+      );
+      // 지도에서 내 위치 점 제거
+      try {
+        js.context.callMethod('flutterSetLiveLocations', ['[]']);
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _sendMyLocation() async {
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      final user = ref.read(authProvider).user;
+      await _api.updateLocation(
+        roomId: widget.roomId,
+        memberName: user?.name ?? '',
+        lat: position.latitude,
+        lng: position.longitude,
+        shared: true,
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _refreshLiveLocations() async {
+    final locations = await _api.getLiveLocations(widget.roomId);
+    if (!mounted) return;
+    try {
+      js.context.callMethod('flutterSetLiveLocations', [jsonEncode(locations)]);
+    } catch (_) {}
   }
 
   // ── 지도 초기화 ──────────────────────────────────────────────
@@ -138,11 +229,13 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
 
-      if (mounted) setState(() {
-        _memberPositions = positions;
-        _midAddress = midAddress;
-        _memberMinutes = minutesMap;
-      });
+      if (mounted) {
+        setState(() {
+          _memberPositions = positions;
+          _midAddress = midAddress;
+          _memberMinutes = minutesMap;
+        });
+      }
 
       // 마커 다 추가된 후 자동 맞춤
       await Future.delayed(const Duration(milliseconds: 500));
@@ -177,34 +270,73 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       );
     }
 
-    // 지도 div = 보이는 영역, 수동 좌표 추적으로 정확한 delta + 시연용 감도 부스트
     return SizedBox(
       key: _mapKey,
       height: 280,
       width: double.infinity,
-      child: Listener(
-        behavior: HitTestBehavior.opaque,
-        onPointerDown: (e) => _lastFocalPoint = e.localPosition,
-        onPointerMove: (e) {
-          if (_lastFocalPoint != null) {
-            final d = e.localPosition - _lastFocalPoint!;
-            try {
-              js.context.callMethod(
-                  'flutterPanMap', [-d.dx * 12.5, -d.dy * 12.5]);
-            } catch (_) {}
-            _lastFocalPoint = e.localPosition;
-          }
-        },
-        onPointerUp: (_) => _lastFocalPoint = null,
-        onPointerCancel: (_) => _lastFocalPoint = null,
-        onPointerSignal: (event) {
-          if (event is PointerScrollEvent) {
-            try {
-              js.context.callMethod('flutterZoomBy', [event.scrollDelta.dy]);
-            } catch (_) {}
-          }
-        },
-        child: const SizedBox.expand(),
+      child: Stack(
+        children: [
+          // 지도 인터랙션 레이어
+          Listener(
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (e) => _lastFocalPoint = e.localPosition,
+            onPointerMove: (e) {
+              if (_lastFocalPoint != null) {
+                final d = e.localPosition - _lastFocalPoint!;
+                try {
+                  js.context.callMethod('flutterPanMap', [-d.dx * 12.5, -d.dy * 12.5]);
+                } catch (_) {}
+                _lastFocalPoint = e.localPosition;
+              }
+            },
+            onPointerUp: (_) => _lastFocalPoint = null,
+            onPointerCancel: (_) => _lastFocalPoint = null,
+            onPointerSignal: (event) {
+              if (event is PointerScrollEvent) {
+                try {
+                  js.context.callMethod('flutterZoomBy', [event.scrollDelta.dy]);
+                } catch (_) {}
+              }
+            },
+            child: const SizedBox.expand(),
+          ),
+          // 내 위치 토글 (지도 좌하단 오버레이)
+          Positioned(
+            bottom: 12,
+            left: 12,
+            child: GestureDetector(
+              onTap: () {}, // 토글 탭이 지도 드래그로 전달되지 않도록
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.92),
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.my_location, size: 14,
+                        color: _locationShared ? AppColors.primary : AppColors.textSecondary),
+                    const SizedBox(width: 4),
+                    const Text('내 위치', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                    const SizedBox(width: 2),
+                    Transform.scale(
+                      scale: 0.75,
+                      child: Switch(
+                        value: _locationShared,
+                        onChanged: _toggleLocation,
+                        activeThumbColor: AppColors.primary,
+                        activeTrackColor: AppColors.primaryLight,
+                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

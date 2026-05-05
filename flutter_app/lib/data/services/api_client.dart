@@ -238,4 +238,30 @@ class ApiClient {
     );
     return res.data as Map<String, dynamic>;
   }
+
+  Future<void> updateLocation({
+    required String roomId,
+    required String memberName,
+    required double lat,
+    required double lng,
+    required bool shared,
+  }) async {
+    try {
+      await _dio.post('/room/$roomId/location', data: {
+        'member_name': memberName,
+        'lat': lat,
+        'lng': lng,
+        'shared': shared,
+      });
+    } catch (_) {}
+  }
+
+  Future<List<Map<String, dynamic>>> getLiveLocations(String roomId) async {
+    try {
+      final res = await _dio.get('/room/$roomId/locations');
+      return List<Map<String, dynamic>>.from(res.data['locations'] as List);
+    } catch (_) {
+      return [];
+    }
+  }
 }
