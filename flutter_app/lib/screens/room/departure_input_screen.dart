@@ -260,7 +260,7 @@ class _DepartureInputScreenState extends ConsumerState<DepartureInputScreen> {
                     crossAxisSpacing: 10,
                     mainAxisSpacing: 10,
                     childAspectRatio: 2.4,
-                    children: TransportMode.values
+                    children: [TransportMode.transit, TransportMode.car]
                         .map((mode) => _transportCard(mode))
                         .toList(),
                   ),

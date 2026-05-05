@@ -105,6 +105,30 @@ def _get_car_minutes(src_lat, src_lng, dst_lat, dst_lng):
         return None
 
 
+def _find_nearby_landmark(lat: float, lng: float) -> str | None:
+    """중간지점 근처 주요 거점(지하철역 → 관광명소/공원 → 학교) 이름 반환. 없으면 None."""
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not kakao_key:
+        return None
+    # (카테고리 코드, 탐색 반경 m) 우선순위 순
+    targets = [("SW8", 1000), ("AT4", 800), ("SC4", 600)]
+    for code, radius in targets:
+        try:
+            resp = requests.get(
+                "https://dapi.kakao.com/v2/local/search/category.json",
+                params={"category_group_code": code, "x": lng, "y": lat,
+                        "radius": radius, "sort": "distance", "size": 1},
+                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                timeout=5,
+            )
+            docs = resp.json().get("documents", [])
+            if docs:
+                return docs[0]["place_name"]
+        except Exception as e:
+            print(f"[Landmark] {code} 오류: {e}")
+    return None
+
+
 def _travel_minutes(src_lat, src_lng, dst_lat, dst_lng, transport):
     """교통수단별 이동시간(분). API 실패 시 거리·속도 기반 추정."""
     if transport == "transit":
@@ -159,6 +183,79 @@ def _time_fair_midpoint(members: list, max_iter: int = 6) -> tuple:
         step *= 0.7
 
     return cx, cy, time_map
+
+
+def _majority_midpoint(members: list, cluster_radius_km: float = 5.0, max_iter: int = 50) -> tuple:
+    """다수결 중간: 인원이 많은 지역에 가중치를 부여한 가중 기하중앙값 (Weiszfeld).
+
+    1. Haversine 5km 반경으로 멤버를 클러스터링
+    2. 각 클러스터 중심 + 인원수를 가중치로 설정
+    3. Weiszfeld 알고리즘으로 가중 기하중앙값 수렴
+    members: [{lat, lng, ...}, ...]
+    반환: (mid_lat, mid_lng)
+    """
+    if len(members) == 1:
+        return members[0]["lat"], members[0]["lng"]
+    if len(members) == 2:
+        return (
+            (members[0]["lat"] + members[1]["lat"]) / 2,
+            (members[0]["lng"] + members[1]["lng"]) / 2,
+        )
+
+    # ── 1. 클러스터링 (greedy, 거리 기준) ───────────────────────
+    clusters = []  # [{cx, cy, weight}]
+    assigned = [False] * len(members)
+    for i, m in enumerate(members):
+        if assigned[i]:
+            continue
+        cluster_lats = [m["lat"]]
+        cluster_lngs = [m["lng"]]
+        assigned[i] = True
+        for j, other in enumerate(members):
+            if assigned[j]:
+                continue
+            if _haversine_km(m["lat"], m["lng"], other["lat"], other["lng"]) <= cluster_radius_km:
+                cluster_lats.append(other["lat"])
+                cluster_lngs.append(other["lng"])
+                assigned[j] = True
+        clusters.append({
+            "lat": sum(cluster_lats) / len(cluster_lats),
+            "lng": sum(cluster_lngs) / len(cluster_lngs),
+            "weight": len(cluster_lats),
+        })
+
+    # ── 2. 가중 평균을 시작점으로 ───────────────────────────────
+    total_w = sum(c["weight"] for c in clusters)
+    cx = sum(c["lat"] * c["weight"] for c in clusters) / total_w
+    cy = sum(c["lng"] * c["weight"] for c in clusters) / total_w
+
+    # ── 3. Weiszfeld 반복 ────────────────────────────────────────
+    for _ in range(max_iter):
+        num_lat = num_lng = denom = 0.0
+        for c in clusters:
+            d = _haversine_km(cx, cy, c["lat"], c["lng"])
+            if d < 1e-9:
+                # 현재 점이 클러스터 중심과 일치하면 해당 클러스터는 건너뜀
+                continue
+            w = c["weight"] / d
+            num_lat += w * c["lat"]
+            num_lng += w * c["lng"]
+            denom += w
+
+        if denom == 0:
+            break
+
+        new_cx = num_lat / denom
+        new_cy = num_lng / denom
+
+        # 수렴 판정: 10m 이내 이동이면 중단
+        if _haversine_km(cx, cy, new_cx, new_cy) * 1000 < 10:
+            cx, cy = new_cx, new_cy
+            break
+        cx, cy = new_cx, new_cy
+
+    return cx, cy
+
 
 load_dotenv()
 
@@ -938,9 +1035,13 @@ def get_midpoint(room_id: str):
             mid_lat, mid_lng = _fair_midpoint(
                 [(m["lat"], m["lng"]) for m in located]
             )
+        elif criteria == "majority" and len(located) >= 2:
+            mid_lat, mid_lng = _majority_midpoint(located)
         else:
             mid_lat = sum(m["lat"] for m in located) / len(located)
             mid_lng = sum(m["lng"] for m in located) / len(located)
+        if not time_map:
+            time_map = {m["name"]: _travel_minutes(m["lat"], m["lng"], mid_lat, mid_lng, m["transport"]) for m in located}
 
         travel_times = [
             {
@@ -952,30 +1053,81 @@ def get_midpoint(room_id: str):
             }
             for m in located
         ]
-        # 중간지점 주소 변환
-        mid_address = "중간 지점"
-        try:
-            kakao_key = os.getenv("KAKAO_API_KEY")
-            if kakao_key:
-                resp = requests.get(
-                    "https://dapi.kakao.com/v2/local/geo/coord2address.json",
-                    params={"x": mid_lng, "y": mid_lat},
-                    headers={"Authorization": f"KakaoAK {kakao_key}"},
-                    timeout=5,
-                )
-                docs = resp.json().get("documents", [])
-                if docs:
-                    road = docs[0].get("road_address")
-                    addr = docs[0].get("address")
-                    mid_address = (road or addr or {}).get("address_name", "중간 지점")
-        except Exception:
-            pass
+        # 중간지점: 주변 랜드마크 우선, 없으면 역지오코딩 주소
+        mid_address = _find_nearby_landmark(mid_lat, mid_lng) or "중간 지점"
+        if mid_address == "중간 지점":
+            try:
+                kakao_key = os.getenv("KAKAO_API_KEY")
+                if kakao_key:
+                    resp = requests.get(
+                        "https://dapi.kakao.com/v2/local/geo/coord2address.json",
+                        params={"x": mid_lng, "y": mid_lat},
+                        headers={"Authorization": f"KakaoAK {kakao_key}"},
+                        timeout=5,
+                    )
+                    docs = resp.json().get("documents", [])
+                    if docs:
+                        road = docs[0].get("road_address")
+                        addr = docs[0].get("address")
+                        mid_address = (road or addr or {}).get("address_name", "중간 지점")
+            except Exception:
+                pass
 
         return jsonify({
             "midpoint": {"lat": mid_lat, "lng": mid_lng},
             "address": mid_address,
             "travel_times": travel_times,
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── 실시간 위치 공유 ──────────────────────────────────────────
+
+@app.route("/room/<room_id>/location", methods=["POST"])
+def update_location(room_id: str):
+    data = request.json or {}
+    member_name = data.get("member_name", "").strip()
+    lat = data.get("lat")
+    lng = data.get("lng")
+    shared = data.get("shared", True)
+
+    if not member_name:
+        return jsonify({"error": "member_name이 필요합니다."}), 400
+
+    try:
+        members = sb_select("members", select="id", filters={"room_id": room_id, "name": member_name}, limit=1)
+        if not members:
+            return jsonify({"error": "멤버를 찾을 수 없습니다."}), 404
+
+        update_data = {"location_shared": shared}
+        if shared and lat is not None and lng is not None:
+            update_data["current_lat"] = lat
+            update_data["current_lng"] = lng
+        else:
+            update_data["current_lat"] = None
+            update_data["current_lng"] = None
+
+        sb_update("members", update_data, {"id": members[0]["id"]})
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/room/<room_id>/locations", methods=["GET"])
+def get_locations(room_id: str):
+    try:
+        members = sb_select(
+            "members",
+            select="name,current_lat,current_lng,location_shared",
+            filters={"room_id": room_id},
+        )
+        locations = [
+            {"name": m["name"], "lat": m["current_lat"], "lng": m["current_lng"]}
+            for m in members
+            if m.get("location_shared") and m.get("current_lat") is not None and m.get("current_lng") is not None
+        ]
+        return jsonify({"locations": locations})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

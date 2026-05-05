@@ -266,6 +266,33 @@
       console.log('[KakaoMap] 뷰포트 변경:', top, left, width, height);
     }
 
+    // 실시간 위치 공유 오버레이 (파란 점)
+    window._liveLocationOverlays = [];
+    function flutterSetLiveLocations(locationsJson) {
+      (window._liveLocationOverlays || []).forEach(function(o) { o.setMap(null); });
+      window._liveLocationOverlays = [];
+      if (!window._kakaoMap) return;
+      var locations = JSON.parse(locationsJson);
+      locations.forEach(function(loc) {
+        var pos = new kakao.maps.LatLng(loc.lat, loc.lng);
+        var first = loc.name ? loc.name.charAt(0) : '?';
+        var content =
+          '<div style="display:flex;flex-direction:column;align-items:center;">' +
+            '<div style="width:30px;height:30px;border-radius:50%;background:#1976D2;border:2.5px solid white;' +
+              'box-shadow:0 2px 6px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;">' +
+              '<span style="color:white;font-size:11px;font-weight:700;">' + first + '</span>' +
+            '</div>' +
+            '<div style="margin-top:3px;background:rgba(25,118,210,0.85);color:white;font-size:10px;' +
+              'font-weight:600;padding:2px 6px;border-radius:8px;white-space:nowrap;">' + loc.name + '</div>' +
+          '</div>';
+        var overlay = new kakao.maps.CustomOverlay({
+          position: pos, content: content, yAnchor: 0.5, xAnchor: 0.5,
+          map: window._kakaoMap, zIndex: 200
+        });
+        window._liveLocationOverlays.push(overlay);
+      });
+    }
+
     function flutterZoomIn() {
       if (!window._kakaoMap) return;
       var lv = window._kakaoMap.getLevel();
