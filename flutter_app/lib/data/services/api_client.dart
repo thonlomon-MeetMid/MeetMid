@@ -9,8 +9,8 @@ class ApiClient {
     _dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
-        connectTimeout: const Duration(seconds: 10),
-        receiveTimeout: const Duration(seconds: 10),
+        connectTimeout: const Duration(seconds: 30),
+        receiveTimeout: const Duration(seconds: 30),
         headers: {'Content-Type': 'application/json'},
       ),
     );
@@ -231,8 +231,11 @@ class ApiClient {
     return List<Map<String, dynamic>>.from(res.data['places'] as List);
   }
 
-  Future<Map<String, dynamic>> getMidpoint(String roomId) async {
-    final res = await _dio.get('/midpoint/$roomId');
+  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair'}) async {
+    final res = await _dio.get(
+      '/midpoint/$roomId',
+      queryParameters: {'criteria': criteria},
+    );
     return res.data as Map<String, dynamic>;
   }
 }

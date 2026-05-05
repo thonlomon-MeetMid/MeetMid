@@ -781,13 +781,58 @@ def get_midpoint(room_id: str):
         mid_lat = sum(m["lat"] for m in located) / len(located)
         mid_lng = sum(m["lng"] for m in located) / len(located)
 
+        # 거리 공평 알고리즘 (수렴 반복)
+        criteria = request.args.get("criteria", "distanceFair")
+        if criteria == "distanceFair" and len(located) >= 2:
+            candidate_lat = mid_lat
+            candidate_lng = mid_lng
+            step = 0.01
+            for _ in range(30):
+                dists = []
+                for m in located:
+                    d = ((m["lat"] - candidate_lat) ** 2 + (m["lng"] - candidate_lng) ** 2) ** 0.5
+                    dists.append({"m": m, "d": d})
+                max_d = max(dists, key=lambda x: x["d"])
+                min_d = min(dists, key=lambda x: x["d"])
+                if max_d["d"] - min_d["d"] < 0.0001:
+                    break
+                candidate_lat += (max_d["m"]["lat"] - candidate_lat) * step
+                candidate_lng += (max_d["m"]["lng"] - candidate_lng) * step
+            mid_lat = candidate_lat
+            mid_lng = candidate_lng
+
         travel_times = [
-            {"name": m["name"], "minutes": 0, "transport": m["transport"]}
-            for m in members
+            {
+                "name": m["name"],
+                "minutes": 0,
+                "transport": m["transport"],
+                "lat": m["lat"],
+                "lng": m["lng"],
+            }
+            for m in located
         ]
+        # 중간지점 주소 변환
+        mid_address = "중간 지점"
+        try:
+            kakao_key = os.getenv("KAKAO_API_KEY")
+            if kakao_key:
+                resp = requests.get(
+                    "https://dapi.kakao.com/v2/local/geo/coord2address.json",
+                    params={"x": mid_lng, "y": mid_lat},
+                    headers={"Authorization": f"KakaoAK {kakao_key}"},
+                    timeout=5,
+                )
+                docs = resp.json().get("documents", [])
+                if docs:
+                    road = docs[0].get("road_address")
+                    addr = docs[0].get("address")
+                    mid_address = (road or addr or {}).get("address_name", "중간 지점")
+        except Exception:
+            pass
+
         return jsonify({
             "midpoint": {"lat": mid_lat, "lng": mid_lng},
-            "address": "중간 지점",
+            "address": mid_address,
             "travel_times": travel_times,
         })
     except Exception as e:

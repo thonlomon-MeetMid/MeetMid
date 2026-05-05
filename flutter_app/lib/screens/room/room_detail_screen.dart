@@ -663,11 +663,24 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               ),
             ),
             if (hasAddress)
-              const Text('완료',
-                  style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF4CAF50)))
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text('완료',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF4CAF50))),
+                  Text(
+                    m.departure,
+                    style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.textSecondary),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              )
             else
               Row(
                 children: [
