@@ -23,6 +23,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   bool _mapInitStarted = false;
   final _api = ApiClient();
   List<Map<String, dynamic>> _memberPositions = [];
+  String _midAddress = '중간 지점';
+
 
   // gesture state
   Offset? _lastFocalPoint;
@@ -61,6 +63,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
       if (js.context['_kakaoMapReady'] == true) {
+        await Future.delayed(const Duration(milliseconds: 300));
         await _loadMemberMarkers();
         if (mounted) setState(() => _mapLoading = false);
         return;
@@ -70,52 +73,60 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   }
 
   Future<void> _loadMemberMarkers() async {
-    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
-    if (rooms.isEmpty) return;
-    final room = rooms.firstWhere(
-        (r) => r.id == widget.roomId,
-        orElse: () => rooms.first);
+    final criteria = ref.read(searchCriteriaProvider);
+    try {
+      final result = await _api.getMidpoint(
+        widget.roomId,
+        criteria: criteria.name,
+      );
 
-    final List<Map<String, dynamic>> positions = [];
-
-    for (final member in room.members) {
-      if (member.departure.isEmpty) continue;
-      final result = await _api.geocode(member.departure);
       if (!mounted) return;
-      if (result != null && result['lat'] != null && result['lng'] != null) {
-        final lat = (result['lat'] as num).toDouble();
-        final lng = (result['lng'] as num).toDouble();
-        positions.add({'name': member.name, 'lat': lat, 'lng': lng});
+
+      final travelTimes = result['travel_times'] as List? ?? [];
+      final midpoint = result['midpoint'] as Map<String, dynamic>?;
+
+      if (midpoint == null) return;
+
+      final midLat = (midpoint['lat'] as num).toDouble();
+      final midLng = (midpoint['lng'] as num).toDouble();
+
+      final List<Map<String, dynamic>> positions = [];
+
+      // 멤버 출발지 마커 (초록색)
+      for (final t in travelTimes) {
+        if (t['lat'] == null || t['lng'] == null) continue;
+        final lat = (t['lat'] as num).toDouble();
+        final lng = (t['lng'] as num).toDouble();
+        final name = t['name'] as String? ?? '';
+        positions.add({'name': name, 'lat': lat, 'lng': lng});
         try {
           js.context.callMethod(
-              'flutterAddCircleMarker', [lat, lng, member.name, '#4CAF50']);
+              'flutterAddCircleMarker', [lat, lng, name, '#4CAF50']);
         } catch (_) {}
       }
-    }
 
-    if (positions.length >= 2) {
-      final midLat = positions
-              .map((p) => p['lat'] as double)
-              .reduce((a, b) => a + b) /
-          positions.length;
-      final midLng = positions
-              .map((p) => p['lng'] as double)
-              .reduce((a, b) => a + b) /
-          positions.length;
+      // 중간지점 마커 (빨간색)
       try {
         js.context.callMethod(
             'flutterAddCircleMarker', [midLat, midLng, '중', '#FF5252']);
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
-    } else if (positions.length == 1) {
-      try {
-        js.context.callMethod(
-            'flutterMoveMap', [positions[0]['lat'], positions[0]['lng'], 5]);
-      } catch (_) {}
-    }
 
-    if (mounted) setState(() => _memberPositions = positions);
-  }
+      if (mounted) setState(() {
+        _memberPositions = positions;
+        _midAddress = result['address'] as String? ?? '중간 지점';
+      });
+
+      // 마커 다 추가된 후 자동 맞춤
+      await Future.delayed(const Duration(milliseconds: 500));
+      try {
+        js.context.callMethod('flutterFitBounds', []);
+      } catch (_) {}
+          } catch (e) {
+            debugPrint('중간지점 로드 오류: $e');
+            if (mounted) setState(() => _mapLoading = false);
+          }
+        }
 
   // ── 지도 조작 헬퍼 ───────────────────────────────────────────
 
@@ -237,7 +248,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                     const SizedBox(height: 8),
                     const Divider(color: AppColors.border),
                     const SizedBox(height: 8),
-                    const Text('중간지점: 강남역 부근',
+                    Text('중간지점: &_midAddress',
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
