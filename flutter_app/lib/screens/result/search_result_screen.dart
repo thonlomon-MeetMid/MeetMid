@@ -1,6 +1,6 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:js' as js;
-import 'package:flutter/gestures.dart';
+import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,11 +22,10 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   bool _mapLoading = true;
   bool _mapInitStarted = false;
   final _api = ApiClient();
+  final _mapKey = GlobalKey();
   List<Map<String, dynamic>> _memberPositions = [];
   String _midAddress = '중간 지점';
-
-
-  // gesture state
+  Map<String, int> _memberMinutes = {};
   Offset? _lastFocalPoint;
 
   @override
@@ -66,10 +65,32 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         await Future.delayed(const Duration(milliseconds: 300));
         await _loadMemberMarkers();
         if (mounted) setState(() => _mapLoading = false);
+        // 지도 div를 실제 보이는 280px 영역에 정확히 맞춤 → fitBounds가 그 영역 기준으로 zoom 계산
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          _applyMapViewport();
+          await Future.delayed(const Duration(milliseconds: 200));
+          try {
+            js.context.callMethod('flutterFitBounds', []);
+          } catch (_) {}
+        });
         return;
       }
     }
     if (mounted) setState(() => _mapLoading = false);
+  }
+
+  // 보이는 지도 영역의 실제 화면 좌표를 측정해 JS에 전달
+  void _applyMapViewport() {
+    final ctx = _mapKey.currentContext;
+    if (ctx == null) return;
+    final box = ctx.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final topLeft = box.localToGlobal(Offset.zero);
+    final size = box.size;
+    try {
+      js.context.callMethod('flutterSetMapBounds',
+          [topLeft.dy, topLeft.dx, size.width, size.height]);
+    } catch (_) {}
   }
 
   Future<void> _loadMemberMarkers() async {
@@ -91,13 +112,16 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       final midLng = (midpoint['lng'] as num).toDouble();
 
       final List<Map<String, dynamic>> positions = [];
+      final Map<String, int> minutesMap = {};
 
-      // 멤버 출발지 마커 (초록색)
+      // 멤버 출발지 마커 (초록색) + 이동시간 수집
       for (final t in travelTimes) {
+        final name = t['name'] as String? ?? '';
+        final mins = (t['minutes'] as num?)?.toInt() ?? 0;
+        if (name.isNotEmpty) minutesMap[name] = mins;
         if (t['lat'] == null || t['lng'] == null) continue;
         final lat = (t['lat'] as num).toDouble();
         final lng = (t['lng'] as num).toDouble();
-        final name = t['name'] as String? ?? '';
         positions.add({'name': name, 'lat': lat, 'lng': lng});
         try {
           js.context.callMethod(
@@ -105,16 +129,19 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         } catch (_) {}
       }
 
-      // 중간지점 마커 (빨간색)
+      final midAddress = result['address'] as String? ?? '중간 지점';
+
+      // 중간지점 마커: 빨간 핀 + 주소 라벨
       try {
         js.context.callMethod(
-            'flutterAddCircleMarker', [midLat, midLng, '중', '#FF5252']);
+            'flutterAddMidpointMarker', [midLat, midLng, midAddress]);
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
 
       if (mounted) setState(() {
         _memberPositions = positions;
-        _midAddress = result['address'] as String? ?? '중간 지점';
+        _midAddress = midAddress;
+        _memberMinutes = minutesMap;
       });
 
       // 마커 다 추가된 후 자동 맞춤
@@ -127,26 +154,6 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
             if (mounted) setState(() => _mapLoading = false);
           }
         }
-
-  // ── 지도 조작 헬퍼 ───────────────────────────────────────────
-
-  void _zoomIn() {
-    try {
-      js.context.callMethod('flutterZoomIn', []);
-    } catch (_) {}
-  }
-
-  void _zoomOut() {
-    try {
-      js.context.callMethod('flutterZoomOut', []);
-    } catch (_) {}
-  }
-
-  void _panMap(double dx, double dy) {
-    try {
-      js.context.callMethod('flutterPanMap', [-dx.toInt(), -dy.toInt()]);
-    } catch (_) {}
-  }
 
   // ── 지도 영역 위젯 ───────────────────────────────────────────
 
@@ -170,28 +177,31 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       );
     }
 
+    // 지도 div = 보이는 영역, 수동 좌표 추적으로 정확한 delta + 시연용 감도 부스트
     return SizedBox(
+      key: _mapKey,
       height: 280,
       width: double.infinity,
       child: Listener(
         behavior: HitTestBehavior.opaque,
-        onPointerDown: (event) => _lastFocalPoint = event.localPosition,
-        onPointerMove: (event) {
+        onPointerDown: (e) => _lastFocalPoint = e.localPosition,
+        onPointerMove: (e) {
           if (_lastFocalPoint != null) {
-            final delta = event.localPosition - _lastFocalPoint!;
-            _panMap(delta.dx, delta.dy);
-            _lastFocalPoint = event.localPosition;
+            final d = e.localPosition - _lastFocalPoint!;
+            try {
+              js.context.callMethod(
+                  'flutterPanMap', [-d.dx * 12.5, -d.dy * 12.5]);
+            } catch (_) {}
+            _lastFocalPoint = e.localPosition;
           }
         },
         onPointerUp: (_) => _lastFocalPoint = null,
         onPointerCancel: (_) => _lastFocalPoint = null,
         onPointerSignal: (event) {
           if (event is PointerScrollEvent) {
-            if (event.scrollDelta.dy > 0) {
-              _zoomOut();
-            } else {
-              _zoomIn();
-            }
+            try {
+              js.context.callMethod('flutterZoomBy', [event.scrollDelta.dy]);
+            } catch (_) {}
           }
         },
         child: const SizedBox.expand(),
@@ -248,7 +258,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                     const SizedBox(height: 8),
                     const Divider(color: AppColors.border),
                     const SizedBox(height: 8),
-                    Text('중간지점: &_midAddress',
+                    Text('중간지점: $_midAddress',
                         style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w700,
@@ -284,7 +294,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                                       fontSize: 14,
                                       color: AppColors.textDark)),
                               const Spacer(),
-                              Text('${m.travelMinutes ?? '-'}분',
+                              Text(
+                                  '${_memberMinutes[m.name] ?? m.travelMinutes ?? '-'}분',
                                   style: const TextStyle(
                                       fontSize: 13,
                                       color: AppColors.textSecondary)),

@@ -1,5 +1,6 @@
 // ignore: avoid_web_libraries_in_flutter
 import 'dart:js' as js;
+import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -187,6 +188,28 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
       backgroundColor: Colors.transparent,
       body: Stack(
         children: [
+          // 카카오맵 드래그/줌 — Stack 최하단. event.delta + 5배 gain.
+          Positioned.fill(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerMove: (event) {
+                try {
+                  js.context.callMethod('flutterPanMap',
+                      [-event.delta.dx * 12.5, -event.delta.dy * 12.5]);
+                } catch (_) {}
+              },
+              onPointerSignal: (event) {
+                if (event is PointerScrollEvent) {
+                  try {
+                    js.context.callMethod(
+                        'flutterZoomBy', [event.scrollDelta.dy]);
+                  } catch (_) {}
+                }
+              },
+              child: const SizedBox.expand(),
+            ),
+          ),
+
           // 지도 로딩 인디케이터 (지도 준비 전 흰 배경으로 DOM div 가림)
           if (_mapLoading)
             Positioned.fill(

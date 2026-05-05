@@ -1,0 +1,44 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MeetMid - Chrome",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "deviceId": "chrome",
+      "toolArgs": [
+        "--dart-define=KAKAO_JS_KEY=c5841cc11f122c97a92dd05f12e78f95"
+      ]
+    },
+    {
+      "name": "MeetMid (Kakao key)",
+      "type": "dart",
+      "request": "launch",
+      "program": "lib/main.dart",
+      "toolArgs": [
+        "--dart-define=KAKAO_JS_KEY=c5841cc11f122c97a92dd05f12e78f95"
+      ]
+    },
+    {
+      "name": "MeetMid (Kakao key) - Profile",
+      "type": "dart",
+      "request": "launch",
+      "flutterMode": "profile",
+      "program": "lib/main.dart",
+      "toolArgs": [
+        "--dart-define=KAKAO_JS_KEY=c5841cc11f122c97a92dd05f12e78f95"
+      ]
+    },
+    {
+      "name": "MeetMid (Kakao key) - Release",
+      "type": "dart",
+      "request": "launch",
+      "flutterMode": "release",
+      "program": "lib/main.dart",
+      "toolArgs": [
+        "--dart-define=KAKAO_JS_KEY=c5841cc11f122c97a92dd05f12e78f95"
+      ]
+    }
+  ]
+}

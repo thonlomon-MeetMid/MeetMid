@@ -161,6 +161,36 @@
       window._kakaoMarkers = [];
     }
 
+    function flutterAddMidpointMarker(lat, lng, address) {
+      if (!window._kakaoMap) return;
+      var pos = new kakao.maps.LatLng(lat, lng);
+      var safeAddr = (address || '중간 지점').replace(/</g, '&lt;');
+      var content =
+        '<div style="position:relative;display:flex;flex-direction:column;align-items:center;">' +
+          '<div style="background:white;padding:6px 12px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,0.25);' +
+            'font-family:-apple-system,sans-serif;font-size:12px;font-weight:700;color:#222;white-space:nowrap;' +
+            'border:2px solid #FF5252;margin-bottom:4px;">' +
+            '📍 ' + safeAddr +
+          '</div>' +
+          '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;' +
+            'border-top:8px solid #FF5252;margin-bottom:-1px;"></div>' +
+          '<div style="width:36px;height:36px;border-radius:50%;background:#FF5252;border:3px solid white;' +
+            'box-shadow:0 3px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">' +
+            '<span style="color:white;font-size:16px;font-weight:700;line-height:1;">중</span>' +
+          '</div>' +
+        '</div>';
+      var overlay = new kakao.maps.CustomOverlay({
+        position: pos,
+        content: content,
+        yAnchor: 1,
+        xAnchor: 0.5,
+        map: window._kakaoMap,
+        zIndex: 100
+      });
+      if (!window._kakaoMarkers) window._kakaoMarkers = [];
+      window._kakaoMarkers.push(overlay);
+    }
+
     function flutterAddCircleMarker(lat, lng, label, colorHex) {
       if (!window._kakaoMap) return;
       var pos = new kakao.maps.LatLng(lat, lng);
@@ -205,19 +235,35 @@
         new kakao.maps.LatLng(sw.lat, sw.lng),
         new kakao.maps.LatLng(ne.lat, ne.lng)
       );
-      window._kakaoMap.setBounds(bounds, 120);
-      // setBounds 가 너무 확대하는 경우 방지 (level 4 이하로 내려가지 않도록)
+      // 4방향 패딩 → 마커들이 가장자리에 붙지 않게 + 자동으로 적절한 줌 레벨 계산
+      // setBounds 가 마커 분포에 따라 flexible 하게 zoom level 결정
+      window._kakaoMap.setBounds(bounds, 90, 90, 90, 90);
+      // 모두 같은 위치 등으로 너무 확대된 경우만 안전 보정
       setTimeout(function () {
         if (window._kakaoMap && window._kakaoMap.getLevel() < 4) {
           window._kakaoMap.setLevel(4);
         }
       }, 300);
-      console.log('[KakaoMap] fitBounds SW:', sw, 'NE:', ne);
+      console.log('[KakaoMap] fitBounds SW:', sw, 'NE:', ne, 'level:', window._kakaoMap.getLevel());
     }
 
     function flutterPanMap(dx, dy) {
       if (!window._kakaoMap) return;
       window._kakaoMap.panBy(dx, dy);
+    }
+
+    // 지도 div 크기/위치를 실제 보이는 영역에만 맞춤 (화면별로 다름)
+    function flutterSetMapBounds(top, left, width, height) {
+      var div = document.getElementById('_flutter_kakao_map');
+      if (!div) return;
+      div.style.top = top + 'px';
+      div.style.left = left + 'px';
+      div.style.width = width + 'px';
+      div.style.height = height + 'px';
+      if (window._kakaoMap) {
+        setTimeout(function () { window._kakaoMap.relayout(); }, 80);
+      }
+      console.log('[KakaoMap] 뷰포트 변경:', top, left, width, height);
     }
 
     function flutterZoomIn() {
@@ -230,6 +276,22 @@
       if (!window._kakaoMap) return;
       var lv = window._kakaoMap.getLevel();
       if (lv < 14) window._kakaoMap.setLevel(lv + 1, { animate: true });
+    }
+
+    // 휠/핀치 delta 누적 → 임계치마다 한 단계씩 줌. 매 이벤트마다 점프하지 않고 부드럽게 전환.
+    window._zoomAccum = 0;
+    function flutterZoomBy(delta) {
+      if (!window._kakaoMap) return;
+      window._zoomAccum += delta;
+      var threshold = 60; // 임계치(누적 px)
+      while (window._zoomAccum >= threshold) {
+        window._zoomAccum -= threshold;
+        flutterZoomOut();
+      }
+      while (window._zoomAccum <= -threshold) {
+        window._zoomAccum += threshold;
+        flutterZoomIn();
+      }
     }
   </script>
 
