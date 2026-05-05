@@ -79,6 +79,16 @@ def sb_delete(table: str, filters: dict) -> None:
     r.raise_for_status()
 
 
+def sb_select_ordered(table: str, select: str = "*", order_col: str = "created_at", order_asc: bool = True, filters: dict = None) -> list:
+    params = {"select": select, "order": f"{order_col}.{'asc' if order_asc else 'desc'}"}
+    if filters:
+        for k, v in filters.items():
+            params[k] = f"eq.{v}"
+    r = requests.get(f"{_SB_REST}/{table}", params=params, headers=_SB_HEADERS, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
 def sb_select_in(table: str, in_col: str, in_values: list, select: str = "*") -> list:
     """PostgREST IN 필터: parentheses URL 인코딩 방지를 위해 URL 수동 구성"""
     if not in_values:
@@ -132,7 +142,12 @@ def _get_members(room_id: str) -> list:
 
 
 def _format_member(m: dict) -> dict:
-    return {"name": m["name"], "address": m["address"], "transport": m["transport"]}
+    return {
+        "name": m["name"],
+        "address": m["address"],
+        "transport": m["transport"],
+        "is_direct_added": m.get("is_direct_added", False),
+    }
 
 
 def geocode_address(address: str):
@@ -169,6 +184,45 @@ def geocode_address(address: str):
         return None
     except Exception:
         return None
+
+
+@app.route("/geocode", methods=["GET"])
+def geocode_endpoint():
+    address = request.args.get("address", "").strip()
+    if not address:
+        return jsonify({"error": "address가 필요합니다."}), 400
+    coords = geocode_address(address)
+    if coords:
+        return jsonify({"lat": coords[0], "lng": coords[1]})
+    return jsonify({"error": "주소를 찾을 수 없습니다."}), 404
+
+
+@app.route("/reverse-geocode", methods=["GET"])
+def reverse_geocode():
+    lat = request.args.get("lat", "").strip()
+    lng = request.args.get("lng", "").strip()
+    if not lat or not lng:
+        return jsonify({"error": "lat, lng가 필요합니다."}), 400
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not kakao_key:
+        return jsonify({"address": ""})
+    try:
+        resp = requests.get(
+            "https://dapi.kakao.com/v2/local/geo/coord2address.json",
+            params={"x": lng, "y": lat},
+            headers={"Authorization": f"KakaoAK {kakao_key}"},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        docs = resp.json().get("documents", [])
+        if docs:
+            road = docs[0].get("road_address") or {}
+            addr = docs[0].get("address") or {}
+            address = road.get("address_name") or addr.get("address_name", "")
+            return jsonify({"address": address})
+        return jsonify({"address": ""})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/places/search", methods=["GET"])
@@ -481,6 +535,7 @@ def join_room(room_id: str):
     address = data.get("address", "").strip()
     transport = data.get("transport", "transit")
     user_uuid = data.get("user_uuid", "").strip()
+    is_direct_added = bool(data.get("is_direct_added", False))
 
     if not name:
         return jsonify({"error": "name이 필요합니다."}), 400
@@ -501,13 +556,60 @@ def join_room(room_id: str):
         if existing:
             sb_update("members", {"address": address, "transport": transport}, filters={"id": existing[0]["id"]})
         else:
-            sb_insert("members", {
+            member_data = {
                 "room_id": room_id,
                 "user_id": resolved_user_id,
                 "name": name,
                 "address": address,
                 "transport": transport,
-            })
+            }
+            if is_direct_added:
+                try:
+                    sb_insert("members", {**member_data, "is_direct_added": True})
+                except Exception:
+                    sb_insert("members", member_data)
+            else:
+                sb_insert("members", member_data)
+
+        members = _get_members(room_id)
+        return jsonify({"ok": True, "members": [_format_member(m) for m in members]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── 멤버 정보 변경 (방장이 직접 추가한 멤버만) ────────────────────────
+
+@app.route("/room/<room_id>/member", methods=["PUT"])
+def update_member(room_id: str):
+    data = request.json or {}
+    requester_name = data.get("requester_name", "").strip()
+    old_name = data.get("old_name", "").strip()
+    new_name = data.get("new_name", old_name).strip() or old_name
+    address = data.get("address", "").strip()
+    transport = data.get("transport", "transit")
+
+    if not old_name:
+        return jsonify({"error": "old_name이 필요합니다."}), 400
+
+    try:
+        room_res = sb_select("rooms", select="host_id", filters={"id": room_id}, limit=1)
+        if not room_res:
+            return jsonify({"error": "존재하지 않는 방입니다."}), 404
+
+        host_uuid = room_res[0]["host_id"]
+        host_user = sb_select("users", select="name", filters={"id": host_uuid}, limit=1)
+        host_name = host_user[0]["name"] if host_user else ""
+
+        if host_name != requester_name:
+            return jsonify({"error": "방장만 정보를 변경할 수 있습니다."}), 403
+
+        member_res = sb_select("members", select="id", filters={"room_id": room_id, "name": old_name}, limit=1)
+        if not member_res:
+            return jsonify({"error": "해당 멤버가 없습니다."}), 404
+
+        sb_update("members",
+                  {"name": new_name, "address": address, "transport": transport},
+                  filters={"id": member_res[0]["id"]})
 
         members = _get_members(room_id)
         return jsonify({"ok": True, "members": [_format_member(m) for m in members]})
@@ -594,6 +696,60 @@ def transfer_host(room_id: str):
             "host_id": new_host_name,
             "host_uuid": new_host_user_id,
             "members": [_format_member(m) for m in members],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ── 방 나가기 ─────────────────────────────────────────────────
+
+@app.route("/room/<room_id>/leave", methods=["POST"])
+def leave_room(room_id: str):
+    data = request.json or {}
+    user_name = data.get("user_name", "").strip()
+
+    if not user_name:
+        return jsonify({"error": "user_name이 필요합니다."}), 400
+
+    try:
+        room_res = sb_select("rooms", select="id,host_id", filters={"id": room_id}, limit=1)
+        if not room_res:
+            return jsonify({"error": "존재하지 않는 방입니다."}), 404
+
+        host_uuid = room_res[0]["host_id"]
+
+        leaving_member = sb_select("members", select="id,user_id,name",
+                                   filters={"room_id": room_id, "name": user_name}, limit=1)
+        if not leaving_member:
+            return jsonify({"error": "해당 멤버가 없습니다."}), 404
+
+        sb_delete("members", filters={"id": leaving_member[0]["id"]})
+
+        remaining = _get_members(room_id)
+
+        if not remaining:
+            sb_delete("rooms", filters={"id": room_id})
+            return jsonify({"ok": True, "room_deleted": True})
+
+        host_user = sb_select("users", select="name", filters={"id": host_uuid}, limit=1)
+        host_name = host_user[0]["name"] if host_user else ""
+        new_host_name = host_name
+
+        if host_name == user_name:
+            new_host = remaining[0]
+            new_host_user_id = new_host.get("user_id")
+            if not new_host_user_id:
+                guest = _get_or_create_guest_user(new_host["name"])
+                new_host_user_id = guest["id"] if guest else None
+            if new_host_user_id:
+                sb_update("rooms", {"host_id": new_host_user_id}, filters={"id": room_id})
+                new_host_name = new_host["name"]
+
+        return jsonify({
+            "ok": True,
+            "room_deleted": False,
+            "host_id": new_host_name,
+            "members": [_format_member(m) for m in remaining],
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500

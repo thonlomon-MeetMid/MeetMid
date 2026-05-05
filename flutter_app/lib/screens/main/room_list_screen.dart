@@ -1,14 +1,37 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 
-class RoomListScreen extends ConsumerWidget {
+class RoomListScreen extends ConsumerStatefulWidget {
   const RoomListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<RoomListScreen> createState() => _RoomListScreenState();
+}
+
+class _RoomListScreenState extends ConsumerState<RoomListScreen> {
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      ref.read(roomListProvider.notifier).silentRefresh();
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final roomsAsync = ref.watch(roomListProvider);
 
     return Scaffold(
@@ -62,6 +85,74 @@ class RoomListScreen extends ConsumerWidget {
                   final room = rooms[i];
                   return GestureDetector(
                     onTap: () => context.push('/room/${room.id}'),
+                    onLongPress: () async {
+                      final action = await showModalBottomSheet<String>(
+                        context: context,
+                        shape: const RoundedRectangleBorder(
+                          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                        ),
+                        builder: (_) => SafeArea(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 8),
+                              Container(
+                                width: 36,
+                                height: 4,
+                                decoration: BoxDecoration(
+                                  color: AppColors.border,
+                                  borderRadius: BorderRadius.circular(2),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              ListTile(
+                                leading: const Icon(Icons.exit_to_app, color: AppColors.error),
+                                title: Text(
+                                  '${room.name} 나가기',
+                                  style: const TextStyle(color: AppColors.error, fontWeight: FontWeight.w500),
+                                ),
+                                onTap: () => Navigator.pop(context, 'leave'),
+                              ),
+                              const SizedBox(height: 8),
+                            ],
+                          ),
+                        ),
+                      );
+                      if (action != 'leave' || !context.mounted) return;
+
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('방 나가기'),
+                          content: Text('정말 "${room.name}"에서 나가시겠습니까?'),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('취소'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              style: TextButton.styleFrom(foregroundColor: AppColors.error),
+                              child: const Text('나가기'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (confirmed != true || !context.mounted) return;
+
+                      final userName = ref.read(authProvider).user?.name ?? '';
+                      final success = await ref.read(roomListProvider.notifier).leaveRoom(
+                        roomId: room.id,
+                        userName: userName,
+                      );
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(success ? '"${room.name}"에서 나갔습니다' : '방 나가기에 실패했습니다'),
+                          ),
+                        );
+                      }
+                    },
                     child: Container(
                       padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(

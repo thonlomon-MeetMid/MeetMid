@@ -123,6 +123,7 @@ class ApiClient {
     String address = '',
     String transport = 'transit',
     String userUuid = '',
+    bool isDirectAdded = false,
   }) async {
     final body = <String, dynamic>{
       'name': name,
@@ -130,7 +131,26 @@ class ApiClient {
       'transport': transport,
     };
     if (userUuid.isNotEmpty) body['user_uuid'] = userUuid;
+    if (isDirectAdded) body['is_direct_added'] = true;
     final res = await _dio.post('/room/$roomId/join', data: body);
+    return res.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> updateMember({
+    required String roomId,
+    required String requesterName,
+    required String oldName,
+    required String newName,
+    required String address,
+    required String transport,
+  }) async {
+    final res = await _dio.put('/room/$roomId/member', data: {
+      'requester_name': requesterName,
+      'old_name': oldName,
+      'new_name': newName,
+      'address': address,
+      'transport': transport,
+    });
     return res.data as Map<String, dynamic>;
   }
 
@@ -170,6 +190,37 @@ class ApiClient {
       'new_host_name': newHostName,
     });
     return res.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> leaveRoom({
+    required String roomId,
+    required String userName,
+  }) async {
+    final res = await _dio.post('/room/$roomId/leave', data: {
+      'user_name': userName,
+    });
+    return res.data as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>?> geocode(String address) async {
+    try {
+      final res = await _dio.get('/geocode', queryParameters: {'address': address});
+      return res.data as Map<String, dynamic>;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String> reverseGeocode(double lat, double lng) async {
+    try {
+      final res = await _dio.get(
+        '/reverse-geocode',
+        queryParameters: {'lat': '$lat', 'lng': '$lng'},
+      );
+      return (res.data['address'] as String?) ?? '';
+    } catch (_) {
+      return '';
+    }
   }
 
   Future<List<Map<String, dynamic>>> searchPlaces(String query) async {
