@@ -160,6 +160,77 @@
       (window._kakaoMarkers || []).forEach(function (m) { m.setMap(null); });
       window._kakaoMarkers = [];
     }
+
+    function flutterAddCircleMarker(lat, lng, label, colorHex) {
+      if (!window._kakaoMap) return;
+      var pos = new kakao.maps.LatLng(lat, lng);
+      var first = label ? label.charAt(0) : '';
+      var content = '<div style="width:34px;height:34px;border-radius:50%;background:' + colorHex + ';border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-family:sans-serif;">' +
+        '<span style="color:white;font-size:12px;font-weight:700;">' + first + '</span></div>';
+      var overlay = new kakao.maps.CustomOverlay({
+        position: pos,
+        content: content,
+        yAnchor: 0.5,
+        xAnchor: 0.5,
+        map: window._kakaoMap
+      });
+      if (!window._kakaoMarkers) window._kakaoMarkers = [];
+      window._kakaoMarkers.push(overlay);
+    }
+
+    function flutterFitBounds() {
+      if (!window._kakaoMap || !window._kakaoMarkers || !window._kakaoMarkers.length) return;
+      var sw = null, ne = null;
+      window._kakaoMarkers.forEach(function (m) {
+        var pos = null;
+        try { pos = m.getPosition(); } catch (e) {}
+        if (!pos) return;
+        var lat = pos.getLat(), lng = pos.getLng();
+        if (sw === null) {
+          sw = { lat: lat, lng: lng };
+          ne = { lat: lat, lng: lng };
+        } else {
+          sw.lat = Math.min(sw.lat, lat); sw.lng = Math.min(sw.lng, lng);
+          ne.lat = Math.max(ne.lat, lat); ne.lng = Math.max(ne.lng, lng);
+        }
+      });
+      if (sw === null) return;
+      // 모든 마커가 동일 위치면 약간의 오프셋을 주어 setBounds 가 동작하게 함
+      if (sw.lat === ne.lat && sw.lng === ne.lng) {
+        var d = 0.005;
+        sw.lat -= d; sw.lng -= d;
+        ne.lat += d; ne.lng += d;
+      }
+      var bounds = new kakao.maps.LatLngBounds(
+        new kakao.maps.LatLng(sw.lat, sw.lng),
+        new kakao.maps.LatLng(ne.lat, ne.lng)
+      );
+      window._kakaoMap.setBounds(bounds, 120);
+      // setBounds 가 너무 확대하는 경우 방지 (level 4 이하로 내려가지 않도록)
+      setTimeout(function () {
+        if (window._kakaoMap && window._kakaoMap.getLevel() < 4) {
+          window._kakaoMap.setLevel(4);
+        }
+      }, 300);
+      console.log('[KakaoMap] fitBounds SW:', sw, 'NE:', ne);
+    }
+
+    function flutterPanMap(dx, dy) {
+      if (!window._kakaoMap) return;
+      window._kakaoMap.panBy(dx, dy);
+    }
+
+    function flutterZoomIn() {
+      if (!window._kakaoMap) return;
+      var lv = window._kakaoMap.getLevel();
+      if (lv > 1) window._kakaoMap.setLevel(lv - 1, { animate: true });
+    }
+
+    function flutterZoomOut() {
+      if (!window._kakaoMap) return;
+      var lv = window._kakaoMap.getLevel();
+      if (lv < 14) window._kakaoMap.setLevel(lv + 1, { animate: true });
+    }
   </script>
 
   <style>

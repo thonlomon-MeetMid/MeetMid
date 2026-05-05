@@ -5,24 +5,39 @@ import '../../core/constants/app_colors.dart';
 import '../../data/models/member.dart';
 import '../../data/models/transport_mode.dart';
 import '../../data/services/api_client.dart';
+import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 
-class AddMemberDialog extends ConsumerStatefulWidget {
+class EditMemberDialog extends ConsumerStatefulWidget {
   final String roomId;
-  const AddMemberDialog({super.key, required this.roomId});
+  final Member member;
+
+  const EditMemberDialog({
+    super.key,
+    required this.roomId,
+    required this.member,
+  });
 
   @override
-  ConsumerState<AddMemberDialog> createState() => _AddMemberDialogState();
+  ConsumerState<EditMemberDialog> createState() => _EditMemberDialogState();
 }
 
-class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
-  final _nameCtrl = TextEditingController();
-  final _departureCtrl = TextEditingController();
-  TransportMode _transport = TransportMode.transit;
+class _EditMemberDialogState extends ConsumerState<EditMemberDialog> {
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _departureCtrl;
+  late TransportMode _transport;
   bool _isLoading = false;
   List<Map<String, dynamic>> _suggestions = [];
   Timer? _debounce;
   final _api = ApiClient();
+
+  @override
+  void initState() {
+    super.initState();
+    _nameCtrl = TextEditingController(text: widget.member.name);
+    _departureCtrl = TextEditingController(text: widget.member.departure);
+    _transport = widget.member.transport;
+  }
 
   @override
   void dispose() {
@@ -49,28 +64,29 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
     });
   }
 
-  Future<void> _add() async {
-    if (_nameCtrl.text.trim().isEmpty) return;
+  Future<void> _save() async {
+    final newName = _nameCtrl.text.trim();
+    if (newName.isEmpty) return;
     setState(() => _isLoading = true);
 
-    final member = Member(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      name: _nameCtrl.text.trim(),
-      departure: _departureCtrl.text.trim(),
-      transport: _transport,
-      isDirectAdded: true,
-    );
-    final success =
-        await ref.read(roomListProvider.notifier).addMember(widget.roomId, member);
+    final requesterName = ref.read(authProvider).user?.name ?? '';
+    final success = await ref.read(roomListProvider.notifier).updateMemberInfo(
+          roomId: widget.roomId,
+          requesterName: requesterName,
+          oldName: widget.member.name,
+          newName: newName,
+          address: _departureCtrl.text.trim(),
+          transport: _transport.name,
+        );
 
     if (!mounted) return;
     setState(() => _isLoading = false);
 
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(success ? '멤버가 추가되었습니다' : '서버 연결 실패 - 로컬에만 저장됩니다'),
+      content: Text(success ? '정보가 변경되었습니다' : '정보 변경에 실패했습니다'),
       backgroundColor: success ? null : Colors.orange,
     ));
-    Navigator.pop(context);
+    if (success) Navigator.pop(context);
   }
 
   @override
@@ -83,7 +99,7 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             const Text(
-              '참여자 직접 추가',
+              '참여자 정보 변경',
               style: TextStyle(
                   fontSize: 17,
                   fontWeight: FontWeight.w700,
@@ -122,7 +138,8 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
                           style: const TextStyle(fontSize: 14),
                           decoration: const InputDecoration(
                             hintText: '주소 검색',
-                            hintStyle: TextStyle(color: AppColors.textHint),
+                            hintStyle:
+                                TextStyle(color: AppColors.textHint),
                             border: InputBorder.none,
                             contentPadding:
                                 EdgeInsets.symmetric(vertical: 12),
@@ -184,11 +201,11 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
                                 color: AppColors.textSecondary),
                           ),
                           onTap: () {
-                            final addr = (place['address'] as String?)
-                                        ?.isNotEmpty ==
-                                    true
-                                ? place['address'] as String
-                                : place['name'] as String? ?? '';
+                            final addr =
+                                (place['address'] as String?)?.isNotEmpty ==
+                                        true
+                                    ? place['address'] as String
+                                    : place['name'] as String? ?? '';
                             setState(() {
                               _departureCtrl.text = addr;
                               _suggestions = [];
@@ -216,7 +233,9 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
               children: [
                 Expanded(
                     child: _transportButton(
-                        Icons.directions_transit, '대중교통', TransportMode.transit)),
+                        Icons.directions_transit,
+                        '대중교통',
+                        TransportMode.transit)),
                 const SizedBox(width: 8),
                 Expanded(
                     child: _transportButton(
@@ -246,7 +265,7 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: ElevatedButton(
-                    onPressed: _isLoading ? null : _add,
+                    onPressed: _isLoading ? null : _save,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
@@ -261,7 +280,7 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
                             height: 16,
                             child: CircularProgressIndicator(
                                 strokeWidth: 2, color: Colors.white))
-                        : const Text('추가',
+                        : const Text('저장',
                             style: TextStyle(
                                 fontSize: 14, fontWeight: FontWeight.w600)),
                   ),
@@ -291,7 +310,8 @@ class _AddMemberDialogState extends ConsumerState<AddMemberDialog> {
           children: [
             Icon(icon,
                 size: 28,
-                color: isSelected ? Colors.white : AppColors.textSecondary),
+                color:
+                    isSelected ? Colors.white : AppColors.textSecondary),
             const SizedBox(height: 6),
             Text(label,
                 style: TextStyle(

@@ -26,6 +26,14 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
     state = await AsyncValue.guard(() => _repo.fetchRoomsFromServer(userId: userId));
   }
 
+  Future<void> silentRefresh() async {
+    final userId = ref.read(authProvider).user?.id ?? '';
+    try {
+      final rooms = await _repo.fetchRoomsFromServer(userId: userId);
+      state = AsyncData(rooms);
+    } catch (_) {}
+  }
+
   void addRoom(Room room) {
     _repo.addRoom(room);
     state = AsyncData(_repo.getRooms());
@@ -54,11 +62,34 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
       name: member.name,
       address: member.departure,
       transport: member.transport.name,
+      isDirectAdded: member.isDirectAdded,
     );
     if (!success) {
       _repo.addMemberToRoom(roomId, member);
     }
     state = AsyncData(_repo.getRooms());
+    return success;
+  }
+
+  Future<bool> updateMemberInfo({
+    required String roomId,
+    required String requesterName,
+    required String oldName,
+    required String newName,
+    required String address,
+    required String transport,
+  }) async {
+    final success = await _repo.updateMemberOnServer(
+      roomId: roomId,
+      requesterName: requesterName,
+      oldName: oldName,
+      newName: newName,
+      address: address,
+      transport: transport,
+    );
+    if (success) {
+      state = AsyncData(_repo.getRooms());
+    }
     return success;
   }
 
@@ -110,6 +141,38 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
       state = AsyncData(_repo.getRooms());
     }
     return success;
+  }
+
+  Future<bool> updateMemberTransport({
+    required String roomId,
+    required String memberName,
+    required String address,
+    required TransportMode transport,
+    String userUuid = '',
+  }) async {
+    final success = await _repo.joinRoomOnServer(
+      roomId: roomId,
+      name: memberName,
+      address: address,
+      transport: transport.name,
+      userUuid: userUuid,
+    );
+    if (success) {
+      state = AsyncData(_repo.getRooms());
+    }
+    return success;
+  }
+
+  Future<bool> leaveRoom({
+    required String roomId,
+    required String userName,
+  }) async {
+    final result = await _repo.leaveRoomOnServer(roomId: roomId, userName: userName);
+    if (result.ok) {
+      final rooms = state.valueOrNull ?? [];
+      state = AsyncData(rooms.where((r) => r.id != roomId).toList());
+    }
+    return result.ok;
   }
 
   Room? getRoomById(String id) => _repo.getRoomById(id);

@@ -8,6 +8,17 @@ class RoomRepository {
 
   final List<Room> _rooms = [];
 
+  Member _parseMember(Map<String, dynamic> m) => Member(
+        id: m['name'] as String,
+        name: m['name'] as String,
+        departure: m['address'] as String,
+        transport: TransportMode.values.firstWhere(
+          (t) => t.name == (m['transport'] as String),
+          orElse: () => TransportMode.transit,
+        ),
+        isDirectAdded: m['is_direct_added'] as bool? ?? false,
+      );
+
   List<Room> getRooms() => List.unmodifiable(_rooms);
 
   Room? getRoomById(String id) {
@@ -49,17 +60,9 @@ class RoomRepository {
   Future<List<Room>> fetchRoomsFromServer({String userId = ''}) async {
     final data = await _apiClient.getRooms(userId: userId);
     final fetched = data.map((d) {
-      final serverMembers = (d['members'] as List<dynamic>).map((m) {
-        return Member(
-          id: m['name'] as String,
-          name: m['name'] as String,
-          departure: m['address'] as String,
-          transport: TransportMode.values.firstWhere(
-            (t) => t.name == (m['transport'] as String),
-            orElse: () => TransportMode.transit,
-          ),
-        );
-      }).toList();
+      final serverMembers = (d['members'] as List<dynamic>)
+          .map((m) => _parseMember(m as Map<String, dynamic>))
+          .toList();
       return Room(
         id: d['room_id'] as String,
         name: d['room_name'] as String,
@@ -106,6 +109,8 @@ class RoomRepository {
     required String name,
     required String address,
     required String transport,
+    String userUuid = '',
+    bool isDirectAdded = false,
   }) async {
     try {
       final data = await _apiClient.joinRoom(
@@ -113,19 +118,13 @@ class RoomRepository {
         name: name,
         address: address,
         transport: transport,
+        userUuid: userUuid,
+        isDirectAdded: isDirectAdded,
       );
       if (data['ok'] == true) {
-        final serverMembers = (data['members'] as List).map((m) {
-          return Member(
-            id: m['name'] as String,
-            name: m['name'] as String,
-            departure: m['address'] as String,
-            transport: TransportMode.values.firstWhere(
-              (t) => t.name == m['transport'],
-              orElse: () => TransportMode.transit,
-            ),
-          );
-        }).toList();
+        final serverMembers = (data['members'] as List)
+            .map((m) => _parseMember(m as Map<String, dynamic>))
+            .toList();
 
         final index = _rooms.indexWhere((r) => r.id == roomId);
         if (index != -1) {
@@ -154,17 +153,9 @@ class RoomRepository {
         targetName: targetName,
       );
       if (data['ok'] == true) {
-        final serverMembers = (data['members'] as List).map((m) {
-          return Member(
-            id: m['name'] as String,
-            name: m['name'] as String,
-            departure: m['address'] as String,
-            transport: TransportMode.values.firstWhere(
-              (t) => t.name == m['transport'],
-              orElse: () => TransportMode.transit,
-            ),
-          );
-        }).toList();
+        final serverMembers = (data['members'] as List)
+            .map((m) => _parseMember(m as Map<String, dynamic>))
+            .toList();
         final index = _rooms.indexWhere((r) => r.id == roomId);
         if (index != -1) {
           _rooms[index] = _rooms[index].copyWith(
@@ -196,6 +187,59 @@ class RoomRepository {
         if (index != -1) {
           _rooms[index] = _rooms[index].copyWith(
             hostId: data['host_id'] as String,
+          );
+        }
+        return true;
+      }
+      return false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Future<({bool ok, bool roomDeleted})> leaveRoomOnServer({
+    required String roomId,
+    required String userName,
+  }) async {
+    try {
+      final data = await _apiClient.leaveRoom(roomId: roomId, userName: userName);
+      if (data['ok'] == true) {
+        final roomDeleted = data['room_deleted'] as bool? ?? false;
+        _rooms.removeWhere((r) => r.id == roomId);
+        return (ok: true, roomDeleted: roomDeleted);
+      }
+      return (ok: false, roomDeleted: false);
+    } catch (e) {
+      return (ok: false, roomDeleted: false);
+    }
+  }
+
+  Future<bool> updateMemberOnServer({
+    required String roomId,
+    required String requesterName,
+    required String oldName,
+    required String newName,
+    required String address,
+    required String transport,
+  }) async {
+    try {
+      final data = await _apiClient.updateMember(
+        roomId: roomId,
+        requesterName: requesterName,
+        oldName: oldName,
+        newName: newName,
+        address: address,
+        transport: transport,
+      );
+      if (data['ok'] == true) {
+        final serverMembers = (data['members'] as List)
+            .map((m) => _parseMember(m as Map<String, dynamic>))
+            .toList();
+        final index = _rooms.indexWhere((r) => r.id == roomId);
+        if (index != -1) {
+          _rooms[index] = _rooms[index].copyWith(
+            members: serverMembers,
+            memberCount: serverMembers.length,
           );
         }
         return true;

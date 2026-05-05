@@ -6,6 +6,7 @@ class Member {
   final String departure;
   final TransportMode transport;
   final int? travelMinutes;
+  final bool isDirectAdded;
 
   const Member({
     required this.id,
@@ -13,6 +14,7 @@ class Member {
     required this.departure,
     required this.transport,
     this.travelMinutes,
+    this.isDirectAdded = false,
   });
 
   Member copyWith({
@@ -21,6 +23,7 @@ class Member {
     String? departure,
     TransportMode? transport,
     int? travelMinutes,
+    bool? isDirectAdded,
   }) {
     return Member(
       id: id ?? this.id,
@@ -28,6 +31,7 @@ class Member {
       departure: departure ?? this.departure,
       transport: transport ?? this.transport,
       travelMinutes: travelMinutes ?? this.travelMinutes,
+      isDirectAdded: isDirectAdded ?? this.isDirectAdded,
     );
   }
 
