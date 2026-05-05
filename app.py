@@ -1,12 +1,164 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
+from math import radians, sin, cos, asin, sqrt
 import hashlib
 import os
 import uuid
 import sys
 import json
 import requests
+
+
+def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
+    """두 좌표 간 구면 거리 (km)."""
+    R = 6371
+    dlat = radians(lat2 - lat1)
+    dlng = radians(lng2 - lng1)
+    a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
+    return 2 * R * asin(sqrt(a))
+
+
+def _fair_midpoint(points: list, max_iter: int = 200) -> tuple:
+    """1-Center: 가장 먼 멤버까지의 거리를 최소화하는 점 (거리 공평).
+    Haversine 기반, 점진적 step 감소로 안정 수렴.
+    points: [(lat, lng), ...]
+    """
+    n = len(points)
+    if n == 1:
+        return points[0]
+    if n == 2:
+        return ((points[0][0] + points[1][0]) / 2,
+                (points[0][1] + points[1][1]) / 2)
+
+    cx = sum(p[0] for p in points) / n
+    cy = sum(p[1] for p in points) / n
+
+    step = 0.5
+    for _ in range(max_iter):
+        farthest = max(points, key=lambda p: _haversine_km(cx, cy, p[0], p[1]))
+        cx += (farthest[0] - cx) * step
+        cy += (farthest[1] - cy) * step
+        step *= 0.97
+        if step < 0.0005:
+            break
+    return cx, cy
+
+
+# ── 이동 시간 계산 ────────────────────────────────────────────
+
+def _get_transit_minutes(src_lat, src_lng, dst_lat, dst_lng):
+    """ODsay 대중교통 소요시간 (분). 실패 시 None."""
+    odsay_key = os.getenv("ODSAY_API_KEY")
+    if not odsay_key:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.odsay.com/v1/api/searchPubTransPathT",
+            params={
+                "apiKey": odsay_key,
+                "SX": src_lng,
+                "SY": src_lat,
+                "EX": dst_lng,
+                "EY": dst_lat,
+            },
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        result = data.get("result")
+        if not result:
+            return None
+        paths = result.get("path", [])
+        if not paths:
+            return None
+        total = paths[0].get("info", {}).get("totalTime")
+        return int(total) if total else None
+    except Exception as e:
+        print(f"[ODsay error] {e}")
+        return None
+
+
+def _get_car_minutes(src_lat, src_lng, dst_lat, dst_lng):
+    """카카오 모빌리티 자동차 소요시간 (분). 실패 시 None."""
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not kakao_key:
+        return None
+    try:
+        resp = requests.get(
+            "https://apis-navi.kakaomobility.com/v1/directions",
+            params={
+                "origin": f"{src_lng},{src_lat}",
+                "destination": f"{dst_lng},{dst_lat}",
+            },
+            headers={"Authorization": f"KakaoAK {kakao_key}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        routes = resp.json().get("routes", [])
+        if not routes:
+            return None
+        duration_sec = routes[0].get("summary", {}).get("duration", 0)
+        return max(1, round(duration_sec / 60))
+    except Exception as e:
+        print(f"[Kakao Navi error] {e}")
+        return None
+
+
+def _travel_minutes(src_lat, src_lng, dst_lat, dst_lng, transport):
+    """교통수단별 이동시간(분). API 실패 시 거리·속도 기반 추정."""
+    if transport == "transit":
+        t = _get_transit_minutes(src_lat, src_lng, dst_lat, dst_lng)
+        if t is not None:
+            return t
+    elif transport == "car":
+        t = _get_car_minutes(src_lat, src_lng, dst_lat, dst_lng)
+        if t is not None:
+            return t
+
+    distance_km = _haversine_km(src_lat, src_lng, dst_lat, dst_lng)
+    speed_kmh = {"car": 30, "transit": 20, "walk": 4}.get(transport, 20)
+    return max(1, round((distance_km / speed_kmh) * 60))
+
+
+def _time_fair_midpoint(members: list, max_iter: int = 6) -> tuple:
+    """시간 공평: 각 멤버의 이동시간 max-min 차를 최소화하는 점.
+    가장 오래 걸리는 멤버 쪽으로 점진 이동.
+    members: [{lat, lng, transport, name, ...}, ...]
+    반환: (mid_lat, mid_lng, {name: minutes})
+    """
+    n = len(members)
+    cx = sum(m["lat"] for m in members) / n
+    cy = sum(m["lng"] for m in members) / n
+    time_map = {}
+
+    step = 0.4
+    for it in range(max_iter):
+        time_map = {}
+        slowest = None
+        slowest_t = -1
+        fastest_t = float("inf")
+        for m in members:
+            t = _travel_minutes(m["lat"], m["lng"], cx, cy, m["transport"])
+            time_map[m["name"]] = t
+            if t > slowest_t:
+                slowest_t = t
+                slowest = m
+            if t < fastest_t:
+                fastest_t = t
+
+        if slowest is None:
+            break
+        if slowest_t - fastest_t <= 2:  # 시간 차이 2분 이내면 수렴
+            break
+        if it == max_iter - 1:
+            break
+
+        cx += (slowest["lat"] - cx) * step
+        cy += (slowest["lng"] - cy) * step
+        step *= 0.7
+
+    return cx, cy, time_map
 
 load_dotenv()
 
@@ -778,33 +930,22 @@ def get_midpoint(room_id: str):
         if not located:
             return jsonify({"error": "좌표를 확인할 수 있는 멤버가 없습니다."}), 400
 
-        mid_lat = sum(m["lat"] for m in located) / len(located)
-        mid_lng = sum(m["lng"] for m in located) / len(located)
-
-        # 거리 공평 알고리즘 (수렴 반복)
         criteria = request.args.get("criteria", "distanceFair")
-        if criteria == "distanceFair" and len(located) >= 2:
-            candidate_lat = mid_lat
-            candidate_lng = mid_lng
-            step = 0.01
-            for _ in range(30):
-                dists = []
-                for m in located:
-                    d = ((m["lat"] - candidate_lat) ** 2 + (m["lng"] - candidate_lng) ** 2) ** 0.5
-                    dists.append({"m": m, "d": d})
-                max_d = max(dists, key=lambda x: x["d"])
-                min_d = min(dists, key=lambda x: x["d"])
-                if max_d["d"] - min_d["d"] < 0.0001:
-                    break
-                candidate_lat += (max_d["m"]["lat"] - candidate_lat) * step
-                candidate_lng += (max_d["m"]["lng"] - candidate_lng) * step
-            mid_lat = candidate_lat
-            mid_lng = candidate_lng
+        time_map = {}
+        if criteria == "timeFair" and len(located) >= 2:
+            mid_lat, mid_lng, time_map = _time_fair_midpoint(located)
+        elif criteria == "distanceFair" and len(located) >= 2:
+            mid_lat, mid_lng = _fair_midpoint(
+                [(m["lat"], m["lng"]) for m in located]
+            )
+        else:
+            mid_lat = sum(m["lat"] for m in located) / len(located)
+            mid_lng = sum(m["lng"] for m in located) / len(located)
 
         travel_times = [
             {
                 "name": m["name"],
-                "minutes": 0,
+                "minutes": time_map.get(m["name"], 0),
                 "transport": m["transport"],
                 "lat": m["lat"],
                 "lng": m["lng"],
