@@ -232,10 +232,14 @@ class ApiClient {
   }
 
   Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair'}) async {
+    final sw = Stopwatch()..start();
     final res = await _dio.get(
       '/midpoint/$roomId',
       queryParameters: {'criteria': criteria},
     );
+    sw.stop();
+    // ignore: avoid_print
+    print('⏱ 중간지점 응답시간: ${sw.elapsedMilliseconds}ms');
     return res.data as Map<String, dynamic>;
   }
 

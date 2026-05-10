@@ -49,11 +49,37 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     if (_mapInitStarted) return;
     _mapInitStarted = true;
     Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        _initKakaoMap();
-        _pollMapReady();
-      }
+      if (mounted) _initMapWithLocation();
     });
+  }
+
+  Future<void> _initMapWithLocation() async {
+    double lat = _kDefaultLat;
+    double lng = _kDefaultLng;
+
+    try {
+      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (serviceEnabled) {
+        var permission = await Geolocator.checkPermission();
+        if (permission == LocationPermission.denied) {
+          permission = await Geolocator.requestPermission();
+        }
+        if (permission == LocationPermission.whileInUse ||
+            permission == LocationPermission.always) {
+          final position = await Geolocator.getCurrentPosition(
+            locationSettings:
+                const LocationSettings(accuracy: LocationAccuracy.high),
+          ).timeout(const Duration(seconds: 6));
+          lat = position.latitude;
+          lng = position.longitude;
+          if (mounted) setState(() => _currentPosition = position);
+        }
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    _initKakaoMap(lat, lng);
+    _pollMapReady();
   }
 
   Future<void> _pollMapReady() async {
@@ -62,16 +88,23 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
       if (!mounted) return;
       if (js.context['_kakaoMapReady'] == true) {
         setState(() => _mapLoading = false);
-        _tryAutoLocation();
+        if (_currentPosition != null) {
+          try {
+            js.context.callMethod('flutterUpdateMyLocation', [
+              _currentPosition!.latitude,
+              _currentPosition!.longitude,
+            ]);
+          } catch (_) {}
+        }
         return;
       }
     }
     if (mounted) setState(() => _mapLoading = false);
   }
 
-  void _initKakaoMap() {
+  void _initKakaoMap(double lat, double lng) {
     try {
-      js.context.callMethod('flutterCreateKakaoMapInBody', [_kDefaultLat, _kDefaultLng]);
+      js.context.callMethod('flutterCreateKakaoMapInBody', [lat, lng]);
     } catch (e) {
       debugPrint('카카오맵 초기화 오류: $e');
       if (mounted) setState(() => _mapLoading = false);
@@ -86,37 +119,6 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     }
   }
 
-  void _addMidpointMarker(double lat, double lng) {
-    try {
-      js.context.callMethod('flutterClearMarkers', []);
-      js.context.callMethod('flutterAddMarker', [lat, lng, '중간지점']);
-      _moveMapTo(lat, lng, level: 5);
-    } catch (e) {
-      debugPrint('중간지점 마커 오류: $e');
-    }
-  }
-
-  Future<void> _tryAutoLocation() async {
-    try {
-      final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) return;
-
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) return;
-
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-      if (mounted) {
-        setState(() => _currentPosition = position);
-        _moveMapTo(position.latitude, position.longitude);
-      }
-    } catch (_) {}
-  }
 
   Future<void> _getCurrentLocation() async {
     setState(() => _locationLoading = true);
@@ -158,6 +160,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           _locationLoading = false;
         });
         _moveMapTo(position.latitude, position.longitude);
+        try {
+          js.context.callMethod('flutterUpdateMyLocation',
+              [position.latitude, position.longitude]);
+        } catch (_) {}
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(
               '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'),
@@ -235,7 +241,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           // 상단 검색바
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
               child: Row(
                 children: [
                   _circleButton(
@@ -247,10 +253,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                     child: GestureDetector(
                       onTap: _closeFab,
                       child: Container(
-                        height: 40,
+                        height: 46,
                         decoration: BoxDecoration(
                           color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
+                          borderRadius: BorderRadius.circular(23),
                           border: Border.all(color: AppColors.border),
                           boxShadow: [
                             BoxShadow(
@@ -334,7 +340,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                           : (_currentPosition != null
                               ? Icons.my_location
                               : Icons.location_searching),
-                      size: 48,
+                      size: 40,
                       iconColor: _currentPosition != null
                           ? AppColors.primary
                           : AppColors.textSecondary,
@@ -349,11 +355,11 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                       onTap: () =>
                           setState(() => _fabExpanded = !_fabExpanded),
                       child: Container(
-                        width: 48,
-                        height: 48,
+                        width: 42,
+                        height: 42,
                         decoration: BoxDecoration(
                           color: AppColors.primary,
-                          borderRadius: BorderRadius.circular(24),
+                          borderRadius: BorderRadius.circular(21),
                           boxShadow: [
                             BoxShadow(
                                 color: AppColors.primary.withValues(alpha: 0.4),
@@ -571,10 +577,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 9),
         decoration: BoxDecoration(
           color: Colors.white,
-          borderRadius: BorderRadius.circular(18),
+          borderRadius: BorderRadius.circular(50),
           boxShadow: [
             BoxShadow(
                 color: Colors.black.withValues(alpha: 0.15),

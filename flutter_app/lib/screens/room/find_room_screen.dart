@@ -95,6 +95,137 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
     }
   }
 
+  Future<void> _showJoinConfirm(Map<String, dynamic> room) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('방 참여',
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+        content: Text(
+          '\'${room['room_name']}\' 방에 참여하시겠습니까?',
+          style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소',
+                style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+            child: const Text('참여',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) _joinRoom(room);
+  }
+
+  void _showRoomPreview(Map<String, dynamic> room) {
+    final memberNames =
+        List<String>.from(room['member_names'] as List? ?? []);
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 드래그 핸들
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                room['room_name'] as String,
+                style: const TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textDark),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                '${memberNames.length}명 참여 중',
+                style: const TextStyle(
+                    fontSize: 13, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 12),
+              const Divider(color: AppColors.border, height: 1),
+              const SizedBox(height: 8),
+              if (memberNames.isEmpty)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 8),
+                  child: Text('참여 중인 멤버가 없습니다.',
+                      style: TextStyle(
+                          fontSize: 13, color: AppColors.textSecondary)),
+                )
+              else
+                ...memberNames.map(
+                  (name) => Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 32,
+                          height: 32,
+                          decoration: BoxDecoration(
+                              color: AppColors.primaryLight,
+                              borderRadius: BorderRadius.circular(16)),
+                          child: const Icon(Icons.person,
+                              color: AppColors.primary, size: 16),
+                        ),
+                        const SizedBox(width: 10),
+                        Text(name,
+                            style: const TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.textDark)),
+                      ],
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    _showJoinConfirm(room);
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                  ),
+                  child: const Text('참여하기',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.w600)),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -106,14 +237,17 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: TextField(
               controller: _searchCtrl,
-              style: const TextStyle(fontSize: 14, color: AppColors.textDark),
+              style:
+                  const TextStyle(fontSize: 14, color: AppColors.textDark),
               decoration: InputDecoration(
                 hintText: '방 이름으로 검색',
-                prefixIcon: const Icon(Icons.search, color: AppColors.textHint, size: 20),
+                prefixIcon: const Icon(Icons.search,
+                    color: AppColors.textHint, size: 20),
                 suffixIcon: _searchCtrl.text.isNotEmpty
                     ? GestureDetector(
                         onTap: () => _searchCtrl.clear(),
-                        child: const Icon(Icons.clear, color: AppColors.textHint, size: 18),
+                        child: const Icon(Icons.clear,
+                            color: AppColors.textHint, size: 18),
                       )
                     : null,
               ),
@@ -122,26 +256,30 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
           Expanded(
             child: _isLoading
                 ? const Center(
-                    child: CircularProgressIndicator(color: AppColors.primary),
-                  )
+                    child:
+                        CircularProgressIndicator(color: AppColors.primary))
                 : _filtered.isEmpty
                     ? Center(
                         child: Text(
-                          _searchCtrl.text.isEmpty ? '참여 가능한 방이 없습니다' : '검색 결과가 없습니다',
+                          _searchCtrl.text.isEmpty
+                              ? '참여 가능한 방이 없습니다'
+                              : '검색 결과가 없습니다',
                           style: const TextStyle(
-                            fontSize: 14,
-                            color: AppColors.textSecondary,
-                          ),
+                              fontSize: 14,
+                              color: AppColors.textSecondary),
                         ),
                       )
                     : RefreshIndicator(
                         onRefresh: _loadRooms,
                         color: AppColors.primary,
                         child: ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                          padding:
+                              const EdgeInsets.fromLTRB(16, 4, 16, 24),
                           itemCount: _filtered.length,
-                          separatorBuilder: (context, i) => const SizedBox(height: 8),
-                          itemBuilder: (context, i) => _buildRoomCard(_filtered[i]),
+                          separatorBuilder: (_, _) =>
+                              const SizedBox(height: 8),
+                          itemBuilder: (_, i) =>
+                              _buildRoomCard(_filtered[i]),
                         ),
                       ),
           ),
@@ -157,9 +295,10 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
     final isJoining = _joiningRoomId == roomId;
 
     return GestureDetector(
-      onTap: isJoining ? null : () => _joinRoom(room),
+      onTap: isJoining ? null : () => _showRoomPreview(room),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding:
+            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
@@ -171,32 +310,26 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
               width: 40,
               height: 40,
               decoration: BoxDecoration(
-                color: AppColors.primaryLight,
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: const Icon(Icons.group, color: AppColors.primary, size: 20),
+                  color: AppColors.primaryLight,
+                  borderRadius: BorderRadius.circular(20)),
+              child: const Icon(Icons.group,
+                  color: AppColors.primary, size: 20),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    roomName,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textDark,
-                    ),
-                  ),
+                  Text(roomName,
+                      style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textDark)),
                   const SizedBox(height: 2),
-                  Text(
-                    '$memberCount명 참여 중',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
+                  Text('$memberCount명 참여 중',
+                      style: const TextStyle(
+                          fontSize: 12,
+                          color: AppColors.textSecondary)),
                 ],
               ),
             ),
@@ -205,23 +338,21 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
                     width: 16,
                     height: 16,
                     child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      color: AppColors.primary,
-                    ),
+                        strokeWidth: 2, color: AppColors.primary),
                   )
-                : Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary,
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: const Text(
-                      '참여',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
+                : GestureDetector(
+                    onTap: () => _showJoinConfirm(room),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(14)),
+                      child: const Text('참여',
+                          style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white)),
                     ),
                   ),
           ],

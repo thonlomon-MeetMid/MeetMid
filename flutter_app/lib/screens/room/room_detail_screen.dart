@@ -177,12 +177,61 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         );
     if (!mounted) return;
     if (success) {
-      context.go('/rooms');
+      context.go('/map');
     } else {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('방 나가기에 실패했습니다')),
       );
     }
+  }
+
+  void _showInviteOptions() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2)),
+            ),
+            const SizedBox(height: 8),
+            ListTile(
+              leading: const Icon(Icons.link, color: AppColors.primary),
+              title: const Text('링크 초대',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              onTap: () {
+                Navigator.pop(ctx);
+                showModalBottomSheet(
+                  context: context,
+                  isScrollControlled: true,
+                  builder: (_) => InviteBottomSheet(roomId: widget.roomId),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.person_add, color: AppColors.primary),
+              title: const Text('직접 추가',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              onTap: () {
+                Navigator.pop(ctx);
+                showDialog(
+                  context: context,
+                  builder: (_) => AddMemberDialog(roomId: widget.roomId),
+                );
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showMemberActions(Member m) {
@@ -307,19 +356,15 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         action: Padding(
           padding: const EdgeInsets.only(right: 8),
           child: GestureDetector(
-            onTap: () => showModalBottomSheet(
-              context: context,
-              isScrollControlled: true,
-              builder: (_) => InviteBottomSheet(roomId: widget.roomId),
-            ),
+            onTap: _leaveRoom,
             child: Container(
               padding:
                   const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
-                color: AppColors.primary,
+                color: AppColors.error,
                 borderRadius: BorderRadius.circular(15),
               ),
-              child: const Text('초대',
+              child: const Text('나가기',
                   style: TextStyle(
                       color: Colors.white,
                       fontSize: 13,
@@ -591,15 +636,12 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               ),
               const Spacer(),
               GestureDetector(
-                onTap: () => showDialog(
-                  context: context,
-                  builder: (_) => AddMemberDialog(roomId: widget.roomId),
-                ),
+                onTap: _showInviteOptions,
                 child: const Row(
                   children: [
-                    Icon(Icons.add, size: 14, color: AppColors.primary),
+                    Icon(Icons.person_add, size: 14, color: AppColors.primary),
                     SizedBox(width: 2),
-                    Text('직접 추가',
+                    Text('초대 및 직접추가',
                         style: TextStyle(
                             fontSize: 13,
                             color: AppColors.primary,
@@ -784,17 +826,6 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                 ),
               ),
             ],
-          ),
-          const SizedBox(height: 2),
-          TextButton.icon(
-            onPressed: _leaveRoom,
-            icon: const Icon(Icons.exit_to_app,
-                size: 16, color: AppColors.error),
-            label: const Text('방 나가기',
-                style: TextStyle(
-                    color: AppColors.error,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500)),
           ),
         ],
       ),

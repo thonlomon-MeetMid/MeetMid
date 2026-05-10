@@ -320,9 +320,56 @@
         flutterZoomIn();
       }
     }
+
+    // 내 현재 위치 표시 (파동 애니메이션)
+    window._myLocationOverlay = null;
+    window._pendingMyLocation = null;
+    function flutterUpdateMyLocation(lat, lng) {
+      console.log('[MyLocation] called lat:', lat, 'lng:', lng, 'mapReady:', !!window._kakaoMap);
+      if (!window._kakaoMap) {
+        // 지도가 아직 준비 안 됐으면 준비 후 재시도
+        window._pendingMyLocation = [lat, lng];
+        var retry = setInterval(function() {
+          if (window._kakaoMap && window._pendingMyLocation) {
+            var p = window._pendingMyLocation;
+            window._pendingMyLocation = null;
+            clearInterval(retry);
+            flutterUpdateMyLocation(p[0], p[1]);
+          }
+        }, 150);
+        return;
+      }
+      if (window._myLocationOverlay) {
+        window._myLocationOverlay.setMap(null);
+        window._myLocationOverlay = null;
+      }
+      var pos = new kakao.maps.LatLng(lat, lng);
+      var content =
+        '<div style="position:relative;width:36px;height:36px;">' +
+          '<div style="position:absolute;top:0;left:0;width:36px;height:36px;border-radius:50%;background:rgba(78,205,196,0.3);animation:myLocationPulse 2s ease-out infinite;"></div>' +
+          '<div style="position:absolute;top:10px;left:10px;width:16px;height:16px;border-radius:50%;background:#4ECDC4;border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.25);"></div>' +
+        '</div>';
+      window._myLocationOverlay = new kakao.maps.CustomOverlay({
+        position: pos,
+        content: content,
+        yAnchor: 0.5,
+        xAnchor: 0.5,
+        map: window._kakaoMap,
+        zIndex: 300
+      });
+      console.log('[MyLocation] overlay created');
+    }
   </script>
 
   <style>
+    @keyframes myLocationPulse {
+      0%   { transform: scale(1);   opacity: 0.5; }
+      70%  { transform: scale(1.9); opacity: 0;   }
+      100% { transform: scale(1);   opacity: 0;   }
+    }
+    .my-location-pulse {
+      animation: myLocationPulse 2s ease-out infinite;
+    }
     html, body {
       background: transparent !important;
       margin: 0;
