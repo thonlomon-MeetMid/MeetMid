@@ -47,14 +47,8 @@ def _fair_midpoint(points: list, max_iter: int = 200) -> tuple:
     return cx, cy
 
 
-def _majority_midpoint(members: list, cluster_radius_km: float = 5.0) -> tuple:
-    if len(members) == 1:
-        return members[0]["lat"], members[0]["lng"]
-    if len(members) == 2:
-        return (
-            (members[0]["lat"] + members[1]["lat"]) / 2,
-            (members[0]["lng"] + members[1]["lng"]) / 2,
-        )
+def _cluster_centroid(members: list, cluster_radius_km: float = 5.0) -> tuple:
+    """멤버들을 반경 내 클러스터로 묶고 인원수 가중 평균 좌표 반환."""
     clusters = []
     assigned = [False] * len(members)
     for i, m in enumerate(members):
@@ -76,17 +70,49 @@ def _majority_midpoint(members: list, cluster_radius_km: float = 5.0) -> tuple:
             "weight": len(cluster_lats),
         })
     total_w = sum(c["weight"] for c in clusters)
-    cx = sum(c["lat"] * c["weight"] for c in clusters) / total_w
-    cy = sum(c["lng"] * c["weight"] for c in clusters) / total_w
-    return cx, cy
+    return (
+        sum(c["lat"] * c["weight"] for c in clusters) / total_w,
+        sum(c["lng"] * c["weight"] for c in clusters) / total_w,
+    )
+
+
+async def _majority_midpoint(
+    client: httpx.AsyncClient,
+    members: list,
+    cluster_radius_km: float = 5.0,
+    bias: float = 0.4,
+) -> tuple:
+    """다수결: 거리 공평(실경로) 결과를 앵커로 하고, 다수 클러스터 중심 쪽으로 bias 만큼 치우침.
+    bias=0 이면 순수 거리 공평, bias=1 이면 순수 클러스터 가중 평균.
+    """
+    if len(members) == 1:
+        return members[0]["lat"], members[0]["lng"]
+    if len(members) == 2:
+        return (
+            (members[0]["lat"] + members[1]["lat"]) / 2,
+            (members[0]["lng"] + members[1]["lng"]) / 2,
+        )
+
+    # 1) 거리 공평 (실경로) 기준점
+    fair_lat, fair_lng, _ = await _route_distance_fair_midpoint(client, members)
+
+    # 2) 다수(인원 가중 클러스터) 중심
+    maj_lat, maj_lng = _cluster_centroid(members, cluster_radius_km)
+
+    # 3) 블렌딩: 거리 공평 → 다수 방향으로 bias 비율만큼 이동
+    return (
+        fair_lat * (1 - bias) + maj_lat * bias,
+        fair_lng * (1 - bias) + maj_lng * bias,
+    )
 
 
 # ── 비동기 외부 API 호출 ──────────────────────────────────────────
 
-async def _get_transit_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng):
+async def _get_transit_metrics(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng):
+    """ODsay 대중교통: (time_min, distance_km) 튜플. 실패 시 (None, None)."""
     odsay_key = os.getenv("ODSAY_API_KEY")
     if not odsay_key:
-        return None
+        return None, None
     try:
         resp = await client.get(
             "https://api.odsay.com/v1/api/searchPubTransPathT",
@@ -97,21 +123,26 @@ async def _get_transit_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_
         data = resp.json()
         result = data.get("result")
         if not result:
-            return None
+            return None, None
         paths = result.get("path", [])
         if not paths:
-            return None
-        total = paths[0].get("info", {}).get("totalTime")
-        return int(total) if total else None
+            return None, None
+        info = paths[0].get("info", {})
+        total_time = info.get("totalTime")
+        total_dist_m = info.get("totalDistance")
+        time_min = int(total_time) if total_time else None
+        dist_km = (total_dist_m / 1000.0) if total_dist_m else None
+        return time_min, dist_km
     except Exception as e:
         print(f"[ODsay error] {e}")
-        return None
+        return None, None
 
 
-async def _get_car_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng):
+async def _get_car_metrics(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng):
+    """카카오 모빌리티: (time_min, distance_km) 튜플. 실패 시 (None, None)."""
     kakao_key = os.getenv("KAKAO_API_KEY")
     if not kakao_key:
-        return None
+        return None, None
     try:
         resp = await client.get(
             "https://apis-navi.kakaomobility.com/v1/directions",
@@ -122,12 +153,42 @@ async def _get_car_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat,
         resp.raise_for_status()
         routes = resp.json().get("routes", [])
         if not routes:
-            return None
-        duration_sec = routes[0].get("summary", {}).get("duration", 0)
-        return max(1, round(duration_sec / 60))
+            return None, None
+        summary = routes[0].get("summary", {})
+        duration_sec = summary.get("duration", 0)
+        distance_m = summary.get("distance", 0)
+        time_min = max(1, round(duration_sec / 60)) if duration_sec else None
+        dist_km = (distance_m / 1000.0) if distance_m else None
+        return time_min, dist_km
     except Exception as e:
         print(f"[Kakao Navi error] {e}")
-        return None
+        return None, None
+
+
+# 하위 호환 wrapper
+async def _get_transit_minutes(client, src_lat, src_lng, dst_lat, dst_lng):
+    t, _ = await _get_transit_metrics(client, src_lat, src_lng, dst_lat, dst_lng)
+    return t
+
+
+async def _get_car_minutes(client, src_lat, src_lng, dst_lat, dst_lng):
+    t, _ = await _get_car_metrics(client, src_lat, src_lng, dst_lat, dst_lng)
+    return t
+
+
+async def _route_km(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng, transport) -> float:
+    """교통수단별 실제 이동거리(km). API 실패 시 Haversine × 우회계수."""
+    if transport == "transit":
+        _, d = await _get_transit_metrics(client, src_lat, src_lng, dst_lat, dst_lng)
+        if d is not None:
+            return d
+    elif transport == "car":
+        _, d = await _get_car_metrics(client, src_lat, src_lng, dst_lat, dst_lng)
+        if d is not None:
+            return d
+    # 도보 또는 API 실패: 직선 × 우회계수 (도보 1.3 / 그외 1.2)
+    detour = 1.3 if transport == "walk" else 1.2
+    return _haversine_km(src_lat, src_lng, dst_lat, dst_lng) * detour
 
 
 async def _travel_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, dst_lng, transport):
@@ -227,6 +288,48 @@ async def geocode_address(client: httpx.AsyncClient, address: str):
         return None
     except Exception:
         return None
+
+
+async def _route_distance_fair_midpoint(
+    client: httpx.AsyncClient, members: list, max_iter: int = 6
+) -> tuple:
+    """거리 공평 (실경로): 각 멤버의 교통수단별 실제 도로/대중교통 거리(km) max를 최소화.
+    구조는 시간 공평과 동일 (1-Center heuristic), 측정값만 거리.
+    반환: (lat, lng, {name: distance_km})
+    """
+    n = len(members)
+    cx = sum(m["lat"] for m in members) / n
+    cy = sum(m["lng"] for m in members) / n
+    dist_map = {}
+    step = 0.4
+
+    for it in range(max_iter):
+        # 멤버별 실제 경로 거리 병렬 측정
+        dists = await asyncio.gather(*[
+            _route_km(client, m["lat"], m["lng"], cx, cy, m["transport"])
+            for m in members
+        ])
+        dist_map = {m["name"]: d for m, d in zip(members, dists)}
+
+        slowest = None
+        slowest_d = -1.0
+        fastest_d = float("inf")
+        for m, d in zip(members, dists):
+            if d > slowest_d:
+                slowest_d = d
+                slowest = m
+            if d < fastest_d:
+                fastest_d = d
+
+        # 수렴 조건: 최대-최소 차가 1km 이내 또는 마지막 반복
+        if slowest is None or slowest_d - fastest_d <= 1.0 or it == max_iter - 1:
+            break
+
+        cx += (slowest["lat"] - cx) * step
+        cy += (slowest["lng"] - cy) * step
+        step *= 0.7
+
+    return cx, cy, dist_map
 
 
 async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter: int = 6) -> tuple:
@@ -1037,9 +1140,9 @@ async def get_midpoint(room_id: str, request: Request, criteria: str = Query("di
         if criteria == "timeFair" and len(located) >= 2:
             mid_lat, mid_lng, time_map = await _time_fair_midpoint(client, located)
         elif criteria == "distanceFair" and len(located) >= 2:
-            mid_lat, mid_lng = _fair_midpoint([(m["lat"], m["lng"]) for m in located])
+            mid_lat, mid_lng, _ = await _route_distance_fair_midpoint(client, located)
         elif criteria in ("majority", "transitFocused") and len(located) >= 2:
-            mid_lat, mid_lng = _majority_midpoint(located)
+            mid_lat, mid_lng = await _majority_midpoint(client, located)
         else:
             mid_lat = sum(m["lat"] for m in located) / len(located)
             mid_lng = sum(m["lng"] for m in located) / len(located)
