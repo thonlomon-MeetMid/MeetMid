@@ -126,7 +126,40 @@
       }
     }
 
+    // ── Polyline ────────────────────────────────────────────────────
+    window._kakaoPolylines = [];
+
+    function flutterClearPolylines() {
+      (window._kakaoPolylines || []).forEach(function(p) { p.setMap(null); });
+      window._kakaoPolylines = [];
+    }
+
+    // data: [{name, coords:[[lng,lat],...], color}]
+    function flutterDrawPolylines(json) {
+      flutterClearPolylines();
+      if (!window._kakaoMap) return;
+      var data = JSON.parse(json);
+      data.forEach(function(item) {
+        var coords = item.coords || [];
+        if (coords.length < 2) return;
+        var path = coords.map(function(c) {
+          return new kakao.maps.LatLng(c[1], c[0]); // [lng,lat] → LatLng(lat,lng)
+        });
+        var polyline = new kakao.maps.Polyline({
+          path: path,
+          strokeWeight: 4,
+          strokeColor: item.color || '#4CAF50',
+          strokeOpacity: 0.85,
+          strokeStyle: 'solid',
+        });
+        polyline.setMap(window._kakaoMap);
+        window._kakaoPolylines.push(polyline);
+      });
+      console.log('[KakaoMap] polyline', data.length, '개 그림');
+    }
+
     function flutterDestroyKakaoMap() {
+      flutterClearPolylines();
       window._kakaoMapCancelled = true;
       window._kakaoMapPendingCreate = null;
       var div = document.getElementById('_flutter_kakao_map');

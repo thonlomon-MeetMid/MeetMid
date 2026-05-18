@@ -231,12 +231,12 @@ class ApiClient {
     return List<Map<String, dynamic>>.from(res.data['places'] as List);
   }
 
-  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair'}) async {
+  Future<Map<String, dynamic>> getMidpoint(String roomId,
+      {String criteria = 'distanceFair', bool polyline = false}) async {
     final sw = Stopwatch()..start();
-    final res = await _dio.get(
-      '/midpoint/$roomId',
-      queryParameters: {'criteria': criteria},
-    );
+    final params = <String, dynamic>{'criteria': criteria};
+    if (polyline) params['polyline'] = 'true';
+    final res = await _dio.get('/midpoint/$roomId', queryParameters: params);
     sw.stop();
     // ignore: avoid_print
     print('⏱ 중간지점 응답시간: ${sw.elapsedMilliseconds}ms');
