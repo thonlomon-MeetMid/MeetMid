@@ -22,6 +22,11 @@ class SearchResultScreen extends ConsumerStatefulWidget {
   ConsumerState<SearchResultScreen> createState() => _SearchResultScreenState();
 }
 
+// 참여자별 경로 색상 (마커 색상과 동일하게 순환)
+const _kRouteColors = [
+  '#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336',
+];
+
 class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   bool _mapLoading = true;
   bool _mapInitStarted = false;
@@ -190,6 +195,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       final result = await _api.getMidpoint(
         widget.roomId,
         criteria: criteria.name,
+        polyline: true,
       );
 
       if (!mounted) return;
@@ -205,29 +211,46 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       final List<Map<String, dynamic>> positions = [];
       final Map<String, int> minutesMap = {};
 
-      // 멤버 출발지 마커 (초록색) + 이동시간 수집
-      for (final t in travelTimes) {
+      // 멤버 출발지 마커 (참여자별 색상) + 이동시간 수집
+      for (int i = 0; i < travelTimes.length; i++) {
+        final t = travelTimes[i];
         final name = t['name'] as String? ?? '';
         final mins = (t['minutes'] as num?)?.toInt() ?? 0;
+        final color = _kRouteColors[i % _kRouteColors.length];
         if (name.isNotEmpty) minutesMap[name] = mins;
         if (t['lat'] == null || t['lng'] == null) continue;
         final lat = (t['lat'] as num).toDouble();
         final lng = (t['lng'] as num).toDouble();
-        positions.add({'name': name, 'lat': lat, 'lng': lng});
+        positions.add({'name': name, 'lat': lat, 'lng': lng, 'color': color});
         try {
-          js.context.callMethod(
-              'flutterAddCircleMarker', [lat, lng, name, '#4CAF50']);
+          js.context.callMethod('flutterAddCircleMarker', [lat, lng, name, color]);
         } catch (_) {}
       }
 
       final midAddress = result['address'] as String? ?? '중간 지점';
 
-      // 중간지점 마커: 빨간 핀 + 주소 라벨
+      // 중간지점 마커 + fitBounds
       try {
-        js.context.callMethod(
-            'flutterAddMidpointMarker', [midLat, midLng, midAddress]);
+        js.context.callMethod('flutterAddMidpointMarker', [midLat, midLng, midAddress]);
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
+
+      // 경로 polyline 그리기
+      final rawPolylines = result['polylines'] as List?;
+      if (rawPolylines != null && rawPolylines.isNotEmpty) {
+        final polylineData = <Map<String, dynamic>>[];
+        for (int i = 0; i < rawPolylines.length; i++) {
+          final p = rawPolylines[i] as Map<String, dynamic>;
+          polylineData.add({
+            'name': p['name'],
+            'coords': p['coords'],
+            'color': _kRouteColors[i % _kRouteColors.length],
+          });
+        }
+        try {
+          js.context.callMethod('flutterDrawPolylines', [jsonEncode(polylineData)]);
+        } catch (_) {}
+      }
 
       if (mounted) {
         setState(() {
@@ -237,16 +260,16 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         });
       }
 
-      // 마커 다 추가된 후 자동 맞춤
+      // 마커 + polyline 다 추가된 후 자동 맞춤
       await Future.delayed(const Duration(milliseconds: 500));
       try {
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
-          } catch (e) {
-            debugPrint('중간지점 로드 오류: $e');
-            if (mounted) setState(() => _mapLoading = false);
-          }
-        }
+    } catch (e) {
+      debugPrint('중간지점 로드 오류: $e');
+      if (mounted) setState(() => _mapLoading = false);
+    }
+  }
 
   // ── 지도 영역 위젯 ───────────────────────────────────────────
 

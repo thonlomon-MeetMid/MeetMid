@@ -165,6 +165,402 @@ async def _get_car_metrics(client: httpx.AsyncClient, src_lat, src_lng, dst_lat,
         return None, None
 
 
+# ── Polyline 추출 ─────────────────────────────────────────────────
+
+# ODsay subwayCode → OSM relation ref 매핑
+_SUBWAY_CODE_TO_OSM_REF: dict = {
+    21: "수인분당", 22: "신분당", 23: "경의",
+    101: "공항", 104: "경춘", 109: "서해",
+    71: "1", 72: "2", 73: "3", 74: "4",   # 부산
+    91: "1", 92: "2",                       # 대구
+    81: "1",                                # 광주
+    131: "1",                               # 대전
+}
+
+# ── 파일 캐시 (역 ID 쌍 → polyline coords) ────────────────────────
+_SUBWAY_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "subway_cache.json")
+_subway_file_cache: dict = {}   # "{sc}:{lo_id}:{hi_id}" → {"coords": [...], "lo_first": bool}
+_osm_subway_cache: dict = {}    # (ref, bbox) → assembled paths (메모리 한정)
+
+
+def _load_subway_file_cache() -> None:
+    try:
+        with open(_SUBWAY_CACHE_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        _subway_file_cache.clear()
+        _subway_file_cache.update(data)
+        print(f"[SubwayCache] {len(_subway_file_cache)}개 역간 구간 로드")
+    except FileNotFoundError:
+        print("[SubwayCache] 캐시 파일 없음 — prebuild 스크립트를 실행하세요")
+    except Exception as e:
+        print(f"[SubwayCache] 로드 오류: {e}")
+
+
+def _save_subway_file_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_SUBWAY_CACHE_PATH), exist_ok=True)
+        with open(_SUBWAY_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_subway_file_cache, f, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        print(f"[SubwayCache] 저장 오류: {e}")
+
+
+def _cache_key(sc: int, id0: int, id1: int) -> str:
+    lo, hi = (id0, id1) if id0 <= id1 else (id1, id0)
+    return f"{sc}:{lo}:{hi}"
+
+
+def _lookup_pair(sc: int, id0: int, id1: int) -> list | None:
+    key = _cache_key(sc, id0, id1)
+    entry = _subway_file_cache.get(key)
+    if entry is None:
+        return None
+    coords = entry["coords"]
+    lo_first = entry["lo_first"]
+    forward_requested = (id0 <= id1)
+    if forward_requested == lo_first:
+        return coords
+    return list(reversed(coords))
+
+
+def _store_pair(sc: int, id0: int, id1: int, coords: list) -> None:
+    key = _cache_key(sc, id0, id1)
+    _subway_file_cache[key] = {"coords": coords, "lo_first": (id0 <= id1)}
+
+
+# ── OSM 조립 ──────────────────────────────────────────────────────
+
+def _assemble_osm_ways(elems: list) -> list:
+    """OSM way 세그먼트를 연속 경로 목록으로 조립. [[lng,lat],...] 리스트."""
+    TOLERANCE = 0.0001
+
+    def close(a, b):
+        return abs(a[0] - b[0]) < TOLERANCE and abs(a[1] - b[1]) < TOLERANCE
+
+    coords_list = []
+    for w in elems:
+        geom = w.get("geometry", [])
+        if len(geom) >= 2:
+            coords_list.append([(g["lon"], g["lat"]) for g in geom])
+
+    used = [False] * len(coords_list)
+    paths = []
+    for i in range(len(coords_list)):
+        if used[i]:
+            continue
+        path = list(coords_list[i])
+        used[i] = True
+        changed = True
+        while changed:
+            changed = False
+            for j in range(len(coords_list)):
+                if used[j]:
+                    continue
+                c = coords_list[j]
+                if close(path[-1], c[0]):
+                    path.extend(c[1:]); used[j] = True; changed = True
+                elif close(path[-1], c[-1]):
+                    path.extend(list(reversed(c))[1:]); used[j] = True; changed = True
+                elif close(path[0], c[-1]):
+                    path = list(c[:-1]) + path; used[j] = True; changed = True
+                elif close(path[0], c[0]):
+                    path = list(reversed(c[:-1])) + path; used[j] = True; changed = True
+        paths.append(path)
+    return paths
+
+
+def slice_lane_coords(
+    all_paths: list,
+    start_lng: float, start_lat: float,
+    end_lng: float,   end_lat: float,
+    start_name: str = "", end_name: str = "",
+) -> list | None:
+    """
+    assembled OSM paths에서 출발역→도착역 구간만 슬라이싱.
+    1. 두 역 모두 800m 이내에 있는 경로 후보 선정
+    2. 후보 중 추출 구간 길이가 가장 짧은 경로 선택 (U-turn 루프 자연 탈락)
+    3. poly거리 / 직선거리 > 5.0 이면 역 좌표 2점 직선 반환
+    4. 매칭 실패 시 None 반환
+    """
+    NEAR_TH_SQ = 0.008 ** 2
+
+    def nearest_idx(path, lng, lat):
+        return min(range(len(path)), key=lambda i: (path[i][0] - lng) ** 2 + (path[i][1] - lat) ** 2)
+
+    def near_dist_sq(path, lng, lat):
+        i = nearest_idx(path, lng, lat)
+        return (path[i][0] - lng) ** 2 + (path[i][1] - lat) ** 2
+
+    def seg_path_len(path, i0, i1):
+        lo, hi = (i0, i1) if i0 <= i1 else (i1, i0)
+        total = 0.0
+        for k in range(lo, hi):
+            dlng = path[k + 1][0] - path[k][0]
+            dlat = path[k + 1][1] - path[k][1]
+            total += (dlng * dlng + dlat * dlat) ** 0.5
+        return total
+
+    direct_deg = ((end_lng - start_lng) ** 2 + (end_lat - start_lat) ** 2) ** 0.5
+
+    best_path = None
+    best_i0 = 0
+    best_i1 = 0
+    best_len = float("inf")
+
+    for path in all_paths:
+        d0 = near_dist_sq(path, start_lng, start_lat)
+        d1 = near_dist_sq(path, end_lng, end_lat)
+        if d0 < NEAR_TH_SQ and d1 < NEAR_TH_SQ:
+            i0c = nearest_idx(path, start_lng, start_lat)
+            i1c = nearest_idx(path, end_lng, end_lat)
+            sl = seg_path_len(path, i0c, i1c)
+            if sl < best_len:
+                best_len = sl
+                best_path = path
+                best_i0 = i0c
+                best_i1 = i1c
+
+    if best_path is None:
+        return None
+
+    lo, hi = (best_i0, best_i1) if best_i0 <= best_i1 else (best_i1, best_i0)
+    seg = best_path[lo : hi + 1]
+    if best_i0 > best_i1:
+        seg = list(reversed(seg))
+
+    ratio = best_len / direct_deg if direct_deg > 1e-9 else 0.0
+    if start_name or end_name:
+        print(f"[SubwayCache] {start_name}→{end_name}: {best_len*111:.2f}km / {direct_deg*111:.2f}km = {ratio:.1f}x")
+
+    if ratio > 5.0:
+        print(f"[SubwayCache] U-turn 감지 (ratio {ratio:.1f}x), 역 좌표 직선 사용")
+        return [[start_lng, start_lat], [end_lng, end_lat]]
+
+    return seg
+
+
+async def _fetch_osm_paths(client: httpx.AsyncClient, subway_code: int, stations: list) -> list:
+    """주어진 노선·bbox의 OSM assembled paths 반환. 메모리 캐시 우선."""
+    lats = [float(s["y"]) for s in stations]
+    lngs = [float(s["x"]) for s in stations]
+    margin = 0.06
+    min_lat = round(min(lats) - margin, 2)
+    max_lat = round(max(lats) + margin, 2)
+    min_lng = round(min(lngs) - margin, 2)
+    max_lng = round(max(lngs) + margin, 2)
+
+    ref = _SUBWAY_CODE_TO_OSM_REF.get(subway_code, str(subway_code))
+    cache_key = (ref, min_lat, min_lng, max_lat, max_lng)
+
+    if cache_key not in _osm_subway_cache:
+        query = (
+            f'[out:json][timeout:30];'
+            f'relation[type=route][route=subway][ref="{ref}"]'
+            f'({min_lat},{min_lng},{max_lat},{max_lng});'
+            f'way(r);out geom;'
+        )
+        try:
+            resp = await client.get(
+                "https://overpass-api.de/api/interpreter",
+                params={"data": query},
+                headers={"User-Agent": "MeetMidApp/1.0"},
+                timeout=30.0,
+            )
+            resp.raise_for_status()
+            elems = resp.json().get("elements", [])
+            _osm_subway_cache[cache_key] = _assemble_osm_ways(elems)
+            print(f"[SubwayOSM] ref={ref} bbox={min_lat},{min_lng}~{max_lat},{max_lng}: {len(elems)}개 way → {len(_osm_subway_cache[cache_key])}개 경로")
+        except Exception as e:
+            print(f"[SubwayOSM] {e}")
+            _osm_subway_cache[cache_key] = []
+
+    return _osm_subway_cache[cache_key]
+
+
+async def _subway_polyline_from_cache(
+    client: httpx.AsyncClient,
+    stations: list,
+    subway_code: int,
+) -> list:
+    """
+    파일 캐시 우선 조회 → miss 시 OSM Overpass 호출 후 캐시 저장.
+    반환: [[lng, lat], ...]
+    """
+    if len(stations) < 2:
+        return [[float(s["x"]), float(s["y"])] for s in stations]
+
+    # 파일 캐시에 없는 쌍 확인
+    missing = any(
+        _lookup_pair(subway_code, s["stationID"], stations[i + 1]["stationID"]) is None
+        for i, s in enumerate(stations[:-1])
+        if s.get("stationID") and stations[i + 1].get("stationID")
+    )
+
+    if missing:
+        all_paths = await _fetch_osm_paths(client, subway_code, stations)
+        cache_dirty = False
+        if all_paths:
+            for si in range(len(stations) - 1):
+                st0, st1 = stations[si], stations[si + 1]
+                id0, id1 = st0.get("stationID", 0), st1.get("stationID", 0)
+                if not id0 or not id1:
+                    continue
+                if _lookup_pair(subway_code, id0, id1) is not None:
+                    continue
+                seg = slice_lane_coords(
+                    all_paths,
+                    float(st0["x"]), float(st0["y"]),
+                    float(st1["x"]), float(st1["y"]),
+                    st0.get("stationName", ""), st1.get("stationName", ""),
+                )
+                if seg is not None:
+                    _store_pair(subway_code, id0, id1, seg)
+                    cache_dirty = True
+        if cache_dirty:
+            _save_subway_file_cache()
+
+    # 파일 캐시에서 조립
+    result_coords: list = []
+    for si in range(len(stations) - 1):
+        st0, st1 = stations[si], stations[si + 1]
+        id0, id1 = st0.get("stationID", 0), st1.get("stationID", 0)
+        s0_lng, s0_lat = float(st0["x"]), float(st0["y"])
+        s1_lng, s1_lat = float(st1["x"]), float(st1["y"])
+
+        seg = _lookup_pair(subway_code, id0, id1) if (id0 and id1) else None
+        if seg:
+            result_coords.extend(seg[1:] if result_coords else seg)
+        else:
+            if not result_coords:
+                result_coords.append([s0_lng, s0_lat])
+            result_coords.append([s1_lng, s1_lat])
+
+    if len(result_coords) < 2:
+        return [[float(s["x"]), float(s["y"])] for s in stations]
+    return result_coords
+
+
+async def _car_polyline(client: httpx.AsyncClient,
+                        src_lat, src_lng, dst_lat, dst_lng) -> list:
+    """카카오 모빌리티 추천 경로 좌표. 반환: [[lng, lat], ...]"""
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not kakao_key:
+        return []
+    try:
+        resp = await client.get(
+            "https://apis-navi.kakaomobility.com/v1/directions",
+            params={
+                "origin": f"{src_lng},{src_lat}",
+                "destination": f"{dst_lng},{dst_lat}",
+                "priority": "RECOMMEND",
+            },
+            headers={"Authorization": f"KakaoAK {kakao_key}"},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        routes = resp.json().get("routes", [])
+        if not routes:
+            return []
+        coords = []
+        for section in routes[0].get("sections", []):
+            for road in section.get("roads", []):
+                verts = road.get("vertexes", [])
+                for i in range(0, len(verts) - 1, 2):
+                    coords.append([verts[i], verts[i + 1]])  # [lng, lat]
+        return coords
+    except Exception as e:
+        print(f"[CarPolyline] {e}")
+        return []
+
+
+async def _transit_polyline(client: httpx.AsyncClient,
+                            src_lat, src_lng, dst_lat, dst_lng) -> list:
+    """대중교통 경로 polyline (하이브리드):
+    - 지하철(1): OSM Overpass 실노선 geometry (역별 매칭, fallback: 역좌표 직선)
+    - 버스(2):   첫/마지막 정류장 사이를 _car_polyline으로 실도로 표시
+    - 도보(3):   역/정류장 좌표 순서 연결
+    반환: [[lng, lat], ...]
+    """
+    odsay_key = os.getenv("ODSAY_API_KEY")
+    if not odsay_key:
+        return []
+    try:
+        resp = await client.get(
+            "https://api.odsay.com/v1/api/searchPubTransPathT",
+            params={"apiKey": odsay_key,
+                    "SX": src_lng, "SY": src_lat,
+                    "EX": dst_lng, "EY": dst_lat},
+            timeout=10.0,
+        )
+        resp.raise_for_status()
+        result = resp.json().get("result")
+        if not result:
+            return []
+        paths = result.get("path", [])
+        if not paths:
+            return []
+
+        sub_paths = paths[0].get("subPath", [])
+
+        # 버스(2)/지하철(1) 구간 병렬 처리
+        async_indices: list = []
+        async_coros: list = []
+        for i, sub in enumerate(sub_paths):
+            stations = sub.get("passStopList", {}).get("stations", [])
+            tt = sub.get("trafficType")
+            if tt == 2 and len(stations) >= 2:  # 버스: 카카오 실도로
+                s_lat = float(stations[0]["y"]);  s_lng = float(stations[0]["x"])
+                e_lat = float(stations[-1]["y"]); e_lng = float(stations[-1]["x"])
+                async_indices.append((i, "bus"))
+                async_coros.append(_car_polyline(client, s_lat, s_lng, e_lat, e_lng))
+            elif tt == 1 and len(stations) >= 2:  # 지하철: OSM 실노선
+                subway_code = sub.get("lane", [{}])[0].get("subwayCode", 0)
+                async_indices.append((i, "subway"))
+                async_coros.append(_subway_polyline_from_cache(client, stations, subway_code))
+
+        async_results = await asyncio.gather(*async_coros)
+        result_map = {idx: res for (idx, _), res in zip(async_indices, async_results)}
+
+        all_coords = []
+        for i, sub in enumerate(sub_paths):
+            traffic_type = sub.get("trafficType")
+            stations = sub.get("passStopList", {}).get("stations", [])
+
+            if traffic_type in (1, 2):
+                coords = result_map.get(i, [])
+                if coords:
+                    all_coords.extend(coords)
+                    continue
+                # fallback: 역/정류장 좌표 직선
+
+            # 도보·fallback: 역/정류장 좌표 순서 연결
+            for station in stations:
+                x, y = station.get("x"), station.get("y")
+                if x is not None and y is not None:
+                    all_coords.append([float(x), float(y)])
+
+        return all_coords
+    except Exception as e:
+        print(f"[TransitPolyline] {e}")
+        return []
+
+
+async def _member_polyline(client: httpx.AsyncClient,
+                           member: dict, dst_lat: float, dst_lng: float) -> dict:
+    """멤버 출발지 → 중간지점 경로 좌표. API 실패 시 직선 fallback."""
+    transport = member.get("transport", "transit")
+    src_lat, src_lng = member["lat"], member["lng"]
+    if transport == "car":
+        coords = await _car_polyline(client, src_lat, src_lng, dst_lat, dst_lng)
+    elif transport == "transit":
+        coords = await _transit_polyline(client, src_lat, src_lng, dst_lat, dst_lng)
+    else:  # walk
+        coords = [[src_lng, src_lat], [dst_lng, dst_lat]]
+    if not coords:  # API 실패 fallback
+        coords = [[src_lng, src_lat], [dst_lng, dst_lat]]
+    return {"name": member["name"], "transport": transport, "coords": coords}
+
+
 # 하위 호환 wrapper
 async def _get_transit_minutes(client, src_lat, src_lng, dst_lat, dst_lng):
     t, _ = await _get_transit_metrics(client, src_lat, src_lng, dst_lat, dst_lng)
@@ -537,6 +933,7 @@ class UpdateLocationRequest(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    _load_subway_file_cache()
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         app.state.client = client
         yield
@@ -1112,7 +1509,9 @@ async def leave_room(room_id: str, request: Request, data: LeaveRoomRequest):
 # ── 중간지점 ──────────────────────────────────────────────────────
 
 @app.get("/midpoint/{room_id}")
-async def get_midpoint(room_id: str, request: Request, criteria: str = Query("distanceFair")):
+async def get_midpoint(room_id: str, request: Request,
+                       criteria: str = Query("distanceFair"),
+                       polyline: bool = Query(False)):
     client = _client(request)
     try:
         if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
@@ -1197,11 +1596,19 @@ async def get_midpoint(room_id: str, request: Request, criteria: str = Query("di
         if not mid_address:
             mid_address = "중간 지점"
 
-        return {
+        response: dict = {
             "midpoint": {"lat": mid_lat, "lng": mid_lng},
             "address": mid_address,
             "travel_times": travel_times,
         }
+
+        if polyline:
+            polylines = await asyncio.gather(*[
+                _member_polyline(client, m, mid_lat, mid_lng) for m in located
+            ])
+            response["polylines"] = list(polylines)
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
