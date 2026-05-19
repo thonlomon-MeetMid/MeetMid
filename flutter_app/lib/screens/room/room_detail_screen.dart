@@ -10,6 +10,8 @@ import '../../data/models/transport_mode.dart';
 import '../../data/services/api_client.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
+import '../../providers/search_provider.dart';
+import '../../data/models/search_criteria.dart';
 import '../../widgets/common/app_header.dart';
 import 'add_member_dialog.dart';
 import 'edit_member_dialog.dart';
@@ -38,7 +40,32 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     });
     _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       ref.read(roomListProvider.notifier).silentRefresh();
+      _checkSearchStatus();
     });
+  }
+
+  Future<void> _checkSearchStatus() async {
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    if (rooms.isEmpty) return;
+    final room = rooms.firstWhere(
+      (r) => r.id == widget.roomId,
+      orElse: () => rooms.first,
+    );
+    final currentUserName = ref.read(authProvider).user?.name ?? '';
+    // 방장은 폴링 안 함
+    if (room.hostId == currentUserName) return;
+
+    final status = await _apiClient.getSearchStatus(widget.roomId);
+    if (status['started'] == true && mounted) {
+      _pollTimer?.cancel();
+      final criteria = status['criteria'] as String? ?? 'distanceFair';
+      final criteriaEnum = SearchCriteria.values.firstWhere(
+        (e) => e.name == criteria,
+        orElse: () => SearchCriteria.distanceFair,
+      );
+      ref.read(searchCriteriaProvider.notifier).state = criteriaEnum;
+      context.push('/room/${widget.roomId}/search-result');
+    }
   }
 
   @override
@@ -85,12 +112,16 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         throw Exception('위치 권한이 거부되었습니다');
       }
       final position = await Geolocator.getCurrentPosition();
-      final address =
-          await _apiClient.reverseGeocode(position.latitude, position.longitude);
+      final address = await _apiClient.reverseGeocode(
+        position.latitude,
+        position.longitude,
+      );
       if (address.isEmpty) throw Exception('주소를 가져올 수 없습니다');
       if (!mounted) return;
       final user = ref.read(authProvider).user;
-      await ref.read(roomListProvider.notifier).updateMemberTransport(
+      await ref
+          .read(roomListProvider.notifier)
+          .updateMemberTransport(
             roomId: widget.roomId,
             memberName: user?.name ?? '',
             address: address,
@@ -99,18 +130,23 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
           );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(e.toString().replaceFirst('Exception: ', '')),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
       }
     } finally {
       if (mounted) setState(() => _isLocating = false);
     }
   }
 
-  Future<void> _selectTransport(Member myMember, TransportMode transport) async {
+  Future<void> _selectTransport(
+    Member myMember,
+    TransportMode transport,
+  ) async {
     final user = ref.read(authProvider).user;
-    await ref.read(roomListProvider.notifier).updateMemberTransport(
+    await ref
+        .read(roomListProvider.notifier)
+        .updateMemberTransport(
           roomId: widget.roomId,
           memberName: myMember.name,
           address: myMember.departure,
@@ -121,33 +157,39 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
 
   Future<void> _kickMember(String targetName) async {
     final currentUserName = ref.read(authProvider).user?.name ?? '';
-    final success = await ref.read(roomListProvider.notifier).kickMember(
+    final success = await ref
+        .read(roomListProvider.notifier)
+        .kickMember(
           roomId: widget.roomId,
           requesterName: currentUserName,
           targetName: targetName,
         );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content:
-            Text(success ? '$targetName님을 강퇴했습니다' : '강퇴에 실패했습니다'),
-        backgroundColor: success ? null : Colors.orange,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '$targetName님을 강퇴했습니다' : '강퇴에 실패했습니다'),
+          backgroundColor: success ? null : Colors.orange,
+        ),
+      );
     }
   }
 
   Future<void> _transferHost(String newHostName) async {
     final currentUserName = ref.read(authProvider).user?.name ?? '';
-    final success = await ref.read(roomListProvider.notifier).transferHost(
+    final success = await ref
+        .read(roomListProvider.notifier)
+        .transferHost(
           roomId: widget.roomId,
           requesterName: currentUserName,
           newHostName: newHostName,
         );
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(
-            success ? '$newHostName님이 방장이 되었습니다' : '방장 이전에 실패했습니다'),
-        backgroundColor: success ? null : Colors.orange,
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? '$newHostName님이 방장이 되었습니다' : '방장 이전에 실패했습니다'),
+          backgroundColor: success ? null : Colors.orange,
+        ),
+      );
     }
   }
 
@@ -159,8 +201,9 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         content: const Text('정말 나가시겠습니까?'),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('취소')),
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppColors.error),
@@ -171,17 +214,16 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     );
     if (confirmed != true || !mounted) return;
     final userName = ref.read(authProvider).user?.name ?? '';
-    final success = await ref.read(roomListProvider.notifier).leaveRoom(
-          roomId: widget.roomId,
-          userName: userName,
-        );
+    final success = await ref
+        .read(roomListProvider.notifier)
+        .leaveRoom(roomId: widget.roomId, userName: userName);
     if (!mounted) return;
     if (success) {
       context.go('/map');
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('방 나가기에 실패했습니다')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('방 나가기에 실패했습니다')));
     }
   }
 
@@ -189,23 +231,28 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (ctx) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             const SizedBox(height: 8),
             Container(
-              width: 36, height: 4,
+              width: 36,
+              height: 4,
               decoration: BoxDecoration(
-                  color: AppColors.border,
-                  borderRadius: BorderRadius.circular(2)),
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const SizedBox(height: 8),
             ListTile(
               leading: const Icon(Icons.link, color: AppColors.primary),
-              title: const Text('링크 초대',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              title: const Text(
+                '링크 초대',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 showModalBottomSheet(
@@ -217,8 +264,10 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.person_add, color: AppColors.primary),
-              title: const Text('직접 추가',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+              title: const Text(
+                '직접 추가',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 showDialog(
@@ -238,7 +287,8 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
       builder: (_) => SafeArea(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -248,46 +298,54 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               width: 36,
               height: 4,
               decoration: BoxDecoration(
-                  color: AppColors.border,
-                  borderRadius: BorderRadius.circular(2)),
+                color: AppColors.border,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const SizedBox(height: 12),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Text(m.name,
-                  style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.textDark)),
+              child: Text(
+                m.name,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.textDark,
+                ),
+              ),
             ),
             const SizedBox(height: 8),
             if (m.isDirectAdded)
               ListTile(
                 leading: const Icon(Icons.edit, color: AppColors.primary),
-                title: const Text('정보 변경',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.primary)),
+                title: const Text(
+                  '정보 변경',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.primary,
+                  ),
+                ),
                 onTap: () {
                   Navigator.pop(context);
                   showDialog(
                     context: context,
-                    builder: (_) => EditMemberDialog(
-                      roomId: widget.roomId,
-                      member: m,
-                    ),
+                    builder: (_) =>
+                        EditMemberDialog(roomId: widget.roomId, member: m),
                   );
                 },
               )
             else
               ListTile(
                 leading: const Text('👑', style: TextStyle(fontSize: 20)),
-                title: const Text('방장 넘기기',
-                    style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        color: AppColors.textDark)),
+                title: const Text(
+                  '방장 넘기기',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textDark,
+                  ),
+                ),
                 onTap: () {
                   Navigator.pop(context);
                   showDialog(
@@ -301,11 +359,14 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               ),
             ListTile(
               leading: const Icon(Icons.person_remove, color: AppColors.error),
-              title: const Text('강퇴하기',
-                  style: TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.error)),
+              title: const Text(
+                '강퇴하기',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.error,
+                ),
+              ),
               onTap: () {
                 Navigator.pop(context);
                 showDialog(
@@ -318,11 +379,11 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               },
             ),
             ListTile(
-              leading:
-                  const Icon(Icons.close, color: AppColors.textSecondary),
-              title: const Text('취소',
-                  style:
-                      TextStyle(fontSize: 15, color: AppColors.textSecondary)),
+              leading: const Icon(Icons.close, color: AppColors.textSecondary),
+              title: const Text(
+                '취소',
+                style: TextStyle(fontSize: 15, color: AppColors.textSecondary),
+              ),
               onTap: () => Navigator.pop(context),
             ),
             const SizedBox(height: 8),
@@ -340,12 +401,13 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     if (rooms.isEmpty) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    final room =
-        rooms.firstWhere((r) => r.id == widget.roomId, orElse: () => rooms.first);
+    final room = rooms.firstWhere(
+      (r) => r.id == widget.roomId,
+      orElse: () => rooms.first,
+    );
     final currentUser = ref.watch(authProvider).user;
     final currentUserName = currentUser?.name ?? '';
-    final isHost =
-        room.hostId.isNotEmpty && room.hostId == currentUserName;
+    final isHost = room.hostId.isNotEmpty && room.hostId == currentUserName;
     final myMember = _findMyMember(room.members, currentUserName);
     final canSearch = myMember?.departure.isNotEmpty == true;
 
@@ -358,17 +420,19 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
           child: GestureDetector(
             onTap: _leaveRoom,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
                 color: AppColors.error,
                 borderRadius: BorderRadius.circular(15),
               ),
-              child: const Text('나가기',
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600)),
+              child: const Text(
+                '나가기',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
             ),
           ),
         ),
@@ -404,15 +468,17 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('내 출발지',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary)),
+          const Text(
+            '내 출발지',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
           const SizedBox(height: 8),
           Container(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
@@ -444,12 +510,16 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                 if (address.isNotEmpty && myMember != null)
                   GestureDetector(
                     onTap: () => context.push(
-                        '/room/${widget.roomId}/departure/${myMember.id}'),
-                    child: const Text('변경',
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w600)),
+                      '/room/${widget.roomId}/departure/${myMember.id}',
+                    ),
+                    child: const Text(
+                      '변경',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
               ],
             ),
@@ -474,7 +544,8 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                   filled: false,
                   onTap: myMember != null
                       ? () => context.push(
-                          '/room/${widget.roomId}/departure/${myMember.id}')
+                          '/room/${widget.roomId}/departure/${myMember.id}',
+                        )
                       : null,
                 ),
               ),
@@ -508,18 +579,23 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                   width: 18,
                   height: 18,
                   child: CircularProgressIndicator(
-                      color: Colors.white, strokeWidth: 2),
+                    color: Colors.white,
+                    strokeWidth: 2,
+                  ),
                 )
               : Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Icon(icon, size: 15, color: fg),
                     const SizedBox(width: 5),
-                    Text(label,
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: fg)),
+                    Text(
+                      label,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: fg,
+                      ),
+                    ),
                   ],
                 ),
         ),
@@ -533,19 +609,21 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     final hasAddress = myMember?.departure.isNotEmpty == true;
     final selectedTransit =
         hasAddress && myMember?.transport == TransportMode.transit;
-    final selectedCar =
-        hasAddress && myMember?.transport == TransportMode.car;
+    final selectedCar = hasAddress && myMember?.transport == TransportMode.car;
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('내 이동수단',
-              style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textSecondary)),
+          const Text(
+            '내 이동수단',
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
+          ),
           const SizedBox(height: 8),
           Row(
             children: [
@@ -591,25 +669,25 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         decoration: BoxDecoration(
           color: isSelected ? AppColors.primary : Colors.white,
           borderRadius: BorderRadius.circular(12),
-          border:
-              isSelected ? null : Border.all(color: AppColors.border),
+          border: isSelected ? null : Border.all(color: AppColors.border),
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon,
-                size: 28,
-                color: isSelected
-                    ? Colors.white
-                    : AppColors.textSecondary),
+            Icon(
+              icon,
+              size: 28,
+              color: isSelected ? Colors.white : AppColors.textSecondary,
+            ),
             const SizedBox(height: 6),
-            Text(label,
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: isSelected
-                        ? Colors.white
-                        : AppColors.textDark)),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: isSelected ? Colors.white : AppColors.textDark,
+              ),
+            ),
           ],
         ),
       ),
@@ -618,8 +696,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
 
   // ── 참여자 목록 ───────────────────────────────────────────
 
-  Widget _participantsSection(
-      Room room, String currentUserName, bool isHost) {
+  Widget _participantsSection(Room room, String currentUserName, bool isHost) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
       child: Column(
@@ -630,9 +707,10 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               Text(
                 '참여자 (${room.memberCount}명)',
                 style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textSecondary),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
               ),
               const Spacer(),
               GestureDetector(
@@ -641,26 +719,34 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                   children: [
                     Icon(Icons.person_add, size: 14, color: AppColors.primary),
                     SizedBox(width: 2),
-                    Text('초대 및 직접추가',
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w500)),
+                    Text(
+                      '초대 및 직접추가',
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           ),
           const SizedBox(height: 10),
-          ...room.members.map((m) => _participantTile(
-              m, currentUserName, isHost, room.hostId)),
+          ...room.members.map(
+            (m) => _participantTile(m, currentUserName, isHost, room.hostId),
+          ),
         ],
       ),
     );
   }
 
   Widget _participantTile(
-      Member m, String currentUserName, bool isHost, String hostId) {
+    Member m,
+    String currentUserName,
+    bool isHost,
+    String hostId,
+  ) {
     final isCurrentUser = m.name == currentUserName;
     final isMemberHost = m.name == hostId;
     final hasAddress = m.departure.isNotEmpty;
@@ -671,8 +757,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       onLongPress: canLongPress ? () => _showMemberActions(m) : null,
       child: Container(
         margin: const EdgeInsets.only(bottom: 8),
-        padding:
-            const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(10),
@@ -683,23 +768,33 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
             Expanded(
               child: Row(
                 children: [
-                  Text(m.name,
-                      style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.textDark)),
+                  Text(
+                    m.name,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textDark,
+                    ),
+                  ),
                   if (isMemberHost) ...[
                     const SizedBox(width: 6),
                     _pill('방장', AppColors.primary, Colors.white),
                   ],
                   if (m.isDirectAdded) ...[
                     const SizedBox(width: 6),
-                    _pill('직접추가', const Color(0xFFE8F0FE), const Color(0xFF3D5AFE)),
+                    _pill(
+                      '직접추가',
+                      const Color(0xFFE8F0FE),
+                      const Color(0xFF3D5AFE),
+                    ),
                   ],
                   if (hasAddress) ...[
                     const SizedBox(width: 6),
-                    Icon(_transportIcon(m.transport),
-                        size: 14, color: AppColors.textSecondary),
+                    Icon(
+                      _transportIcon(m.transport),
+                      size: 14,
+                      color: AppColors.textSecondary,
+                    ),
                   ],
                 ],
               ),
@@ -708,16 +803,20 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  const Text('완료',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF4CAF50))),
+                  const Text(
+                    '완료',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF4CAF50),
+                    ),
+                  ),
                   Text(
                     m.departure,
                     style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textSecondary),
+                      fontSize: 11,
+                      color: AppColors.textSecondary,
+                    ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   ),
@@ -726,9 +825,10 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
             else
               Row(
                 children: [
-                  const Text('대기중...',
-                      style: TextStyle(
-                          fontSize: 13, color: AppColors.textHint)),
+                  const Text(
+                    '대기중...',
+                    style: TextStyle(fontSize: 13, color: AppColors.textHint),
+                  ),
                   if (showInlineKick) ...[
                     const SizedBox(width: 8),
                     GestureDetector(
@@ -739,11 +839,14 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                           onConfirm: () => _kickMember(m.name),
                         ),
                       ),
-                      child: const Text('강퇴',
-                          style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.error)),
+                      child: const Text(
+                        '강퇴',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.error,
+                        ),
+                      ),
                     ),
                   ],
                 ],
@@ -758,10 +861,13 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-          color: bg, borderRadius: BorderRadius.circular(10)),
-      child: Text(text,
-          style: TextStyle(
-              fontSize: 10, fontWeight: FontWeight.w700, color: fg)),
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: fg),
+      ),
     );
   }
 
@@ -789,26 +895,38 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
             children: [
               Expanded(
                 child: OutlinedButton(
-                  onPressed: () => context
-                      .push('/room/${widget.roomId}/search-settings'),
+                  onPressed: () =>
+                      context.push('/room/${widget.roomId}/search-settings'),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppColors.primary),
                     foregroundColor: AppColors.primary,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 13),
                   ),
-                  child: const Text('탐색 기준 설정',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  child: const Text(
+                    '탐색 기준 설정',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: ElevatedButton(
                   onPressed: canSearch
-                      ? () => context
-                          .push('/room/${widget.roomId}/search-result')
+                      ? () async {
+                          final criteria = ref.read(searchCriteriaProvider);
+                          await _apiClient.startSearch(
+                            widget.roomId,
+                            criteria.name,
+                          );
+                          if (mounted) {
+                            context.push(
+                              '/room/${widget.roomId}/search-result',
+                            );
+                          }
+                        }
                       : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.primary,
@@ -816,13 +934,15 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                     foregroundColor: Colors.white,
                     disabledForegroundColor: AppColors.textSecondary,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(10)),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                     padding: const EdgeInsets.symmetric(vertical: 13),
                     elevation: 0,
                   ),
-                  child: const Text('중간지점 탐색',
-                      style: TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
+                  child: const Text(
+                    '중간지점 탐색',
+                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ],

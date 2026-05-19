@@ -23,9 +23,7 @@ class SearchResultScreen extends ConsumerStatefulWidget {
 }
 
 // 참여자별 경로 색상 (마커 색상과 동일하게 순환)
-const _kRouteColors = [
-  '#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336',
-];
+const _kRouteColors = ['#4CAF50', '#2196F3', '#FF9800', '#9C27B0', '#F44336'];
 
 class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   bool _mapLoading = true;
@@ -58,9 +56,22 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       _api.updateLocation(
         roomId: widget.roomId,
         memberName: user?.name ?? '',
-        lat: 0, lng: 0,
+        lat: 0,
+        lng: 0,
         shared: false,
       );
+    }
+    // 방장이 나가면 탐색 상태 초기화
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    if (rooms.isNotEmpty) {
+      final room = rooms.firstWhere(
+        (r) => r.id == widget.roomId,
+        orElse: () => rooms.first,
+      );
+      final currentUserName = ref.read(authProvider).user?.name ?? '';
+      if (room.hostId == currentUserName) {
+        _api.startSearch(widget.roomId, 'reset');
+      }
     }
     try {
       js.context.callMethod('flutterDestroyKakaoMap', []);
@@ -77,11 +88,12 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       if (perm == LocationPermission.denied) {
         perm = await Geolocator.requestPermission();
       }
-      if (perm == LocationPermission.denied || perm == LocationPermission.deniedForever) {
+      if (perm == LocationPermission.denied ||
+          perm == LocationPermission.deniedForever) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('위치 권한을 허용해주세요')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('위치 권한을 허용해주세요')));
         }
         return;
       }
@@ -91,10 +103,12 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       await _refreshLiveLocations();
       // 8초마다 내 위치 갱신, 2초마다 전체 폴링
       _locationUpdateTimer = Timer.periodic(
-        const Duration(seconds: 8), (_) => _sendMyLocation(),
+        const Duration(seconds: 8),
+        (_) => _sendMyLocation(),
       );
       _locationPollTimer = Timer.periodic(
-        const Duration(seconds: 2), (_) => _refreshLiveLocations(),
+        const Duration(seconds: 2),
+        (_) => _refreshLiveLocations(),
       );
     } else {
       setState(() => _locationShared = false);
@@ -104,7 +118,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       await _api.updateLocation(
         roomId: widget.roomId,
         memberName: user?.name ?? '',
-        lat: 0, lng: 0,
+        lat: 0,
+        lng: 0,
         shared: false,
       );
       // 지도에서 내 위치 점 제거
@@ -117,7 +132,9 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   Future<void> _sendMyLocation() async {
     try {
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       final user = ref.read(authProvider).user;
       await _api.updateLocation(
@@ -184,8 +201,12 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     final topLeft = box.localToGlobal(Offset.zero);
     final size = box.size;
     try {
-      js.context.callMethod('flutterSetMapBounds',
-          [topLeft.dy, topLeft.dx, size.width, size.height]);
+      js.context.callMethod('flutterSetMapBounds', [
+        topLeft.dy,
+        topLeft.dx,
+        size.width,
+        size.height,
+      ]);
     } catch (_) {}
   }
 
@@ -223,7 +244,12 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         final lng = (t['lng'] as num).toDouble();
         positions.add({'name': name, 'lat': lat, 'lng': lng, 'color': color});
         try {
-          js.context.callMethod('flutterAddCircleMarker', [lat, lng, name, color]);
+          js.context.callMethod('flutterAddCircleMarker', [
+            lat,
+            lng,
+            name,
+            color,
+          ]);
         } catch (_) {}
       }
 
@@ -231,7 +257,11 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
       // 중간지점 마커 + fitBounds
       try {
-        js.context.callMethod('flutterAddMidpointMarker', [midLat, midLng, midAddress]);
+        js.context.callMethod('flutterAddMidpointMarker', [
+          midLat,
+          midLng,
+          midAddress,
+        ]);
         js.context.callMethod('flutterFitBounds', []);
       } catch (_) {}
 
@@ -248,7 +278,9 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
           });
         }
         try {
-          js.context.callMethod('flutterDrawPolylines', [jsonEncode(polylineData)]);
+          js.context.callMethod('flutterDrawPolylines', [
+            jsonEncode(polylineData),
+          ]);
         } catch (_) {}
       }
 
@@ -284,9 +316,10 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
             children: [
               CircularProgressIndicator(color: AppColors.primary),
               SizedBox(height: 10),
-              Text('지도 불러오는 중...',
-                  style:
-                      TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+              Text(
+                '지도 불러오는 중...',
+                style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+              ),
             ],
           ),
         ),
@@ -307,7 +340,10 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
               if (_lastFocalPoint != null) {
                 final d = e.localPosition - _lastFocalPoint!;
                 try {
-                  js.context.callMethod('flutterPanMap', [-d.dx * 12.5, -d.dy * 12.5]);
+                  js.context.callMethod('flutterPanMap', [
+                    -d.dx * 12.5,
+                    -d.dy * 12.5,
+                  ]);
                 } catch (_) {}
                 _lastFocalPoint = e.localPosition;
               }
@@ -317,47 +353,13 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
             onPointerSignal: (event) {
               if (event is PointerScrollEvent) {
                 try {
-                  js.context.callMethod('flutterZoomBy', [event.scrollDelta.dy]);
+                  js.context.callMethod('flutterZoomBy', [
+                    event.scrollDelta.dy,
+                  ]);
                 } catch (_) {}
               }
             },
             child: const SizedBox.expand(),
-          ),
-          // 내 위치 토글 (지도 좌하단 오버레이)
-          Positioned(
-            bottom: 12,
-            left: 12,
-            child: GestureDetector(
-              onTap: () {}, // 토글 탭이 지도 드래그로 전달되지 않도록
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.92),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 6, offset: Offset(0, 2))],
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.my_location, size: 14,
-                        color: _locationShared ? AppColors.primary : AppColors.textSecondary),
-                    const SizedBox(width: 4),
-                    const Text('내 위치', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
-                    const SizedBox(width: 2),
-                    Transform.scale(
-                      scale: 0.75,
-                      child: Switch(
-                        value: _locationShared,
-                        onChanged: _toggleLocation,
-                        activeThumbColor: AppColors.primary,
-                        activeTrackColor: AppColors.primaryLight,
-                        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
           ),
         ],
       ),
@@ -370,12 +372,12 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   Widget build(BuildContext context) {
     final rooms = ref.watch(roomListProvider).valueOrNull ?? const [];
     if (rooms.isEmpty) {
-      return const Scaffold(
-          body: Center(child: CircularProgressIndicator()));
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     final room = rooms.firstWhere(
-        (r) => r.id == widget.roomId,
-        orElse: () => rooms.first);
+      (r) => r.id == widget.roomId,
+      orElse: () => rooms.first,
+    );
     final criteria = ref.watch(searchCriteriaProvider);
 
     return Scaffold(
@@ -397,66 +399,107 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.place,
-                            size: 18, color: AppColors.primary),
-                        const SizedBox(width: 4),
-                        Text(
-                          _memberPositions.isNotEmpty
-                              ? '참여자 위치 기반 계산'
-                              : '주소 없는 참여자 제외됨',
-                          style: const TextStyle(
-                              fontSize: 13,
-                              color: AppColors.textSecondary),
+                        const Icon(
+                          Icons.my_location,
+                          size: 16,
+                          color: Color(0xFF26DE81),
+                        ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          '내 위치 공유',
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF26DE81),
+                          ),
+                        ),
+                        const Spacer(),
+                        Transform.scale(
+                          scale: 0.85,
+                          child: Switch(
+                            value: _locationShared,
+                            onChanged: _toggleLocation,
+                            activeTrackColor: const Color(0xFF20BF6B),
+                            thumbColor: WidgetStateProperty.resolveWith((
+                              states,
+                            ) {
+                              if (states.contains(WidgetState.selected)) {
+                                return const Color(0xFF26DE81);
+                              }
+                              return null;
+                            }),
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
                     const Divider(color: AppColors.border),
                     const SizedBox(height: 8),
-                    Text('중간지점: $_midAddress',
-                        style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.textDark)),
+                    Text(
+                      '중간지점: $_midAddress',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
                     const SizedBox(height: 4),
-                    Text('기준: ${criteria.label}',
-                        style: const TextStyle(
-                            fontSize: 13,
-                            color: AppColors.textSecondary)),
+                    Text(
+                      '기준: ${criteria.label}',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
                     const SizedBox(height: 14),
-                    const Text('참여자별 소요 시간',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.textPrimary)),
+                    const Text(
+                      '참여자별 소요 시간',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
                     const SizedBox(height: 8),
-                    ...room.members.map((m) => Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(
-                            children: [
-                              CircleAvatar(
-                                radius: 14,
-                                backgroundColor: AppColors.success,
-                                child: Text(m.name[0],
-                                    style: const TextStyle(
-                                        fontSize: 11,
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w700)),
+                    ...room.members.map(
+                      (m) => Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            CircleAvatar(
+                              radius: 14,
+                              backgroundColor: AppColors.success,
+                              child: Text(
+                                m.name[0],
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
-                              const SizedBox(width: 10),
-                              Text(m.name,
-                                  style: const TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.textDark)),
-                              const Spacer(),
-                              Text(
-                                  '${_memberMinutes[m.name] ?? m.travelMinutes ?? '-'}분',
-                                  style: const TextStyle(
-                                      fontSize: 13,
-                                      color: AppColors.textSecondary)),
-                            ],
-                          ),
-                        )),
+                            ),
+                            const SizedBox(width: 10),
+                            Text(
+                              m.name,
+                              style: const TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textDark,
+                              ),
+                            ),
+                            const Spacer(),
+                            Text(
+                              '${_memberMinutes[m.name] ?? m.travelMinutes ?? '-'}분',
+                              style: const TextStyle(
+                                fontSize: 13,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -477,12 +520,17 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                       side: const BorderSide(color: AppColors.border),
                       foregroundColor: AppColors.textDark,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                     ),
-                    child: const Text('추천 장소',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600)),
+                    child: const Text(
+                      '추천 장소',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -494,13 +542,18 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 14),
                       elevation: 0,
                     ),
-                    child: const Text('결과 공유',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w600)),
+                    child: const Text(
+                      '결과 공유',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ),
               ],

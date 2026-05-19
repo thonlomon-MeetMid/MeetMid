@@ -1615,6 +1615,27 @@ async def get_midpoint(room_id: str, request: Request,
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── 탐색 상태 (메모리) ───────────────────────────────────────────
+_search_status: dict = {}  # room_id → {"started": bool, "criteria": str}
+
+@app.post("/room/{room_id}/start-search")
+async def start_search(room_id: str, criteria: str = Query("distanceFair")):
+    import time
+    if criteria == 'reset':
+        _search_status[room_id] = {"started": False, "criteria": "distanceFair", "time": time.time()}
+        return {"ok": True}
+    _search_status[room_id] = {"started": True, "criteria": criteria, "time": time.time()}
+    return {"ok": True}
+
+@app.get("/room/{room_id}/search-status")
+async def get_search_status(room_id: str):
+    import time
+    status = _search_status.get(room_id, {"started": False, "criteria": "distanceFair"})
+    if status.get("started") and time.time() - status.get("time", 0) > 30:
+        _search_status[room_id] = {"started": False, "criteria": status["criteria"]}
+        return {"started": False, "criteria": status["criteria"]}
+    return status
+
 # ── 실시간 위치 공유 ──────────────────────────────────────────────
 
 @app.post("/room/{room_id}/location")

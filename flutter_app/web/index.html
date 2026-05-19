@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html>
+
 <head>
   <!--
     If you are serving your web app in a path other than the root, change the
@@ -28,7 +29,7 @@
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
-  <link rel="icon" type="image/png" href="favicon.png"/>
+  <link rel="icon" type="image/png" href="favicon.png" />
 
   <title>meetmid_flutter</title>
   <link rel="manifest" href="manifest.json">
@@ -56,7 +57,7 @@
   <!-- 카카오맵 JavaScript SDK: autoload=false로 kakao 객체를 동기적으로 정의 -->
   <script type="text/javascript"
     src="https://dapi.kakao.com/v2/maps/sdk.js?appkey=04a8f8db7bad0830a64e1ec052d0bfa7&autoload=false">
-  </script>
+    </script>
   <script>
     window._kakaoMap = null;
     window._kakaoMapReady = false;
@@ -130,7 +131,7 @@
     window._kakaoPolylines = [];
 
     function flutterClearPolylines() {
-      (window._kakaoPolylines || []).forEach(function(p) { p.setMap(null); });
+      (window._kakaoPolylines || []).forEach(function (p) { p.setMap(null); });
       window._kakaoPolylines = [];
     }
 
@@ -139,10 +140,10 @@
       flutterClearPolylines();
       if (!window._kakaoMap) return;
       var data = JSON.parse(json);
-      data.forEach(function(item) {
+      data.forEach(function (item) {
         var coords = item.coords || [];
         if (coords.length < 2) return;
-        var path = coords.map(function(c) {
+        var path = coords.map(function (c) {
           return new kakao.maps.LatLng(c[1], c[0]); // [lng,lat] → LatLng(lat,lng)
         });
         var polyline = new kakao.maps.Polyline({
@@ -194,48 +195,67 @@
       window._kakaoMarkers = [];
     }
 
+    window._midpointInfoVisible = false;
+    window._midpointOverlay = null;
+    window._midpointInfoOverlay = null;
+
     function flutterAddMidpointMarker(lat, lng, address) {
       if (!window._kakaoMap) return;
       var pos = new kakao.maps.LatLng(lat, lng);
       var safeAddr = (address || '중간 지점').replace(/</g, '&lt;');
-      var content =
-        '<div style="position:relative;display:flex;flex-direction:column;align-items:center;">' +
-          '<div style="background:white;padding:6px 12px;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,0.25);' +
-            'font-family:-apple-system,sans-serif;font-size:12px;font-weight:700;color:#222;white-space:nowrap;' +
-            'border:2px solid #FF5252;margin-bottom:4px;">' +
-            '📍 ' + safeAddr +
-          '</div>' +
-          '<div style="width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent;' +
-            'border-top:8px solid #FF5252;margin-bottom:-1px;"></div>' +
-          '<div style="width:36px;height:36px;border-radius:50%;background:#FF5252;border:3px solid white;' +
-            'box-shadow:0 3px 8px rgba(0,0,0,0.4);display:flex;align-items:center;justify-content:center;">' +
-            '<span style="color:white;font-size:16px;font-weight:700;line-height:1;">중</span>' +
-          '</div>' +
+
+      var flagContent =
+        '<div style="cursor:pointer;display:flex;flex-direction:column;align-items:center;" onclick="window._toggleMidInfo()">' +
+        '<svg width="48" height="58" viewBox="0 0 36 44" xmlns="http://www.w3.org/2000/svg">' +
+        '<rect x="7" y="4" width="4" height="36" rx="2" fill="#555"/>' +
+        '<path d="M11 4 L32 12 L11 20 Z" fill="#EB3B5A"/>' +
+        '</svg>' +
         '</div>';
-      var overlay = new kakao.maps.CustomOverlay({
-        position: pos,
-        content: content,
-        yAnchor: 1,
-        xAnchor: 0.5,
-        map: window._kakaoMap,
-        zIndex: 100
+
+      window._midpointOverlay = new kakao.maps.CustomOverlay({
+        position: pos, content: flagContent,
+        yAnchor: 1, xAnchor: 0.5, map: window._kakaoMap, zIndex: 100
       });
+
+      var infoContent =
+        '<div style="background:white;padding:6px 12px;border-radius:14px;' +
+        'box-shadow:0 2px 8px rgba(0,0,0,0.25);font-size:12px;font-weight:700;' +
+        'color:#222;white-space:nowrap;border:2px solid #FF5252;margin-bottom:4px;">' +
+        '📍 ' + safeAddr +
+        '</div>';
+
+      window._midpointInfoOverlay = new kakao.maps.CustomOverlay({
+        position: pos, content: infoContent,
+        yAnchor: 2.2, xAnchor: 0.5, map: null, zIndex: 101
+      });
+
+      window._toggleMidInfo = function () {
+        window._midpointInfoVisible = !window._midpointInfoVisible;
+        window._midpointInfoOverlay.setMap(
+          window._midpointInfoVisible ? window._kakaoMap : null
+        );
+      };
+
       if (!window._kakaoMarkers) window._kakaoMarkers = [];
-      window._kakaoMarkers.push(overlay);
+      window._kakaoMarkers.push(window._midpointOverlay);
     }
 
     function flutterAddCircleMarker(lat, lng, label, colorHex) {
       if (!window._kakaoMap) return;
       var pos = new kakao.maps.LatLng(lat, lng);
-      var first = label ? label.charAt(0) : '';
-      var content = '<div style="width:34px;height:34px;border-radius:50%;background:' + colorHex + ';border:3px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.3);display:flex;align-items:center;justify-content:center;font-family:sans-serif;">' +
-        '<span style="color:white;font-size:12px;font-weight:700;">' + first + '</span></div>';
+      var color = colorHex || '#4B6584';
+      var content =
+        '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">' +
+        '<div style="background:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;' +
+        'color:#2d3436;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.25);">' + label + '</div>' +
+        '<svg width="30" height="44" viewBox="0 0 30 44" xmlns="http://www.w3.org/2000/svg">' +
+        '<circle cx="15" cy="19" r="10" fill="#2980B9"/>' +
+        '<rect x="13" y="24" width="4" height="16" rx="2" fill="#555"/>' +
+        '</svg>' +
+        '</div>';
       var overlay = new kakao.maps.CustomOverlay({
-        position: pos,
-        content: content,
-        yAnchor: 0.5,
-        xAnchor: 0.5,
-        map: window._kakaoMap
+        position: pos, content: content,
+        yAnchor: 1, xAnchor: 0.5, map: window._kakaoMap
       });
       if (!window._kakaoMarkers) window._kakaoMarkers = [];
       window._kakaoMarkers.push(overlay);
@@ -246,7 +266,7 @@
       var sw = null, ne = null;
       window._kakaoMarkers.forEach(function (m) {
         var pos = null;
-        try { pos = m.getPosition(); } catch (e) {}
+        try { pos = m.getPosition(); } catch (e) { }
         if (!pos) return;
         var lat = pos.getLat(), lng = pos.getLng();
         if (sw === null) {
@@ -302,21 +322,25 @@
     // 실시간 위치 공유 오버레이 (파란 점)
     window._liveLocationOverlays = [];
     function flutterSetLiveLocations(locationsJson) {
-      (window._liveLocationOverlays || []).forEach(function(o) { o.setMap(null); });
+      if (window._myLocationOverlay) {
+        window._myLocationOverlay.setMap(null);
+        window._myLocationOverlay = null;
+      }
+      (window._liveLocationOverlays || []).forEach(function (o) { o.setMap(null); });
       window._liveLocationOverlays = [];
       if (!window._kakaoMap) return;
       var locations = JSON.parse(locationsJson);
-      locations.forEach(function(loc) {
+      locations.forEach(function (loc) {
         var pos = new kakao.maps.LatLng(loc.lat, loc.lng);
         var first = loc.name ? loc.name.charAt(0) : '?';
         var content =
-          '<div style="display:flex;flex-direction:column;align-items:center;">' +
-            '<div style="width:30px;height:30px;border-radius:50%;background:#1976D2;border:2.5px solid white;' +
-              'box-shadow:0 2px 6px rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;">' +
-              '<span style="color:white;font-size:11px;font-weight:700;">' + first + '</span>' +
-            '</div>' +
-            '<div style="margin-top:3px;background:rgba(25,118,210,0.85);color:white;font-size:10px;' +
-              'font-weight:600;padding:2px 6px;border-radius:8px;white-space:nowrap;">' + loc.name + '</div>' +
+          '<div style="display:flex;flex-direction:column;align-items:center;gap:2px;">' +
+          '<div style="background:white;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;' +
+          'color:#1B8A4F;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,0.25);">' + loc.name + '</div>' +
+          '<svg width="28" height="36" viewBox="0 0 28 36" xmlns="http://www.w3.org/2000/svg">' +
+          '<path d="M14 2C8.477 2 4 6.477 4 12C4 19 14 34 14 34S24 19 24 12C24 6.477 19.523 2 14 2Z" fill="#26DE81"/>' +
+          '<circle cx="14" cy="12" r="5" fill="white" opacity="0.9"/>' +
+          '</svg>' +
           '</div>';
         var overlay = new kakao.maps.CustomOverlay({
           position: pos, content: content, yAnchor: 0.5, xAnchor: 0.5,
@@ -362,7 +386,7 @@
       if (!window._kakaoMap) {
         // 지도가 아직 준비 안 됐으면 준비 후 재시도
         window._pendingMyLocation = [lat, lng];
-        var retry = setInterval(function() {
+        var retry = setInterval(function () {
           if (window._kakaoMap && window._pendingMyLocation) {
             var p = window._pendingMyLocation;
             window._pendingMyLocation = null;
@@ -379,8 +403,10 @@
       var pos = new kakao.maps.LatLng(lat, lng);
       var content =
         '<div style="position:relative;width:36px;height:36px;">' +
-          '<div style="position:absolute;top:0;left:0;width:36px;height:36px;border-radius:50%;background:rgba(78,205,196,0.3);animation:myLocationPulse 2s ease-out infinite;"></div>' +
-          '<div style="position:absolute;top:10px;left:10px;width:16px;height:16px;border-radius:50%;background:#4ECDC4;border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.25);"></div>' +
+        '<div style="position:absolute;top:0;left:0;width:36px;height:36px;border-radius:50%;' +
+        'background:rgba(76,175,80,0.3);animation:myLocationPulse 2s ease-out infinite;"></div>' +
+        '<div style="position:absolute;top:10px;left:10px;width:16px;height:16px;border-radius:50%;' +
+        'background:#4CAF50;border:2.5px solid white;box-shadow:0 2px 6px rgba(0,0,0,0.25);"></div>' +
         '</div>';
       window._myLocationOverlay = new kakao.maps.CustomOverlay({
         position: pos,
@@ -396,21 +422,37 @@
 
   <style>
     @keyframes myLocationPulse {
-      0%   { transform: scale(1);   opacity: 0.5; }
-      70%  { transform: scale(1.9); opacity: 0;   }
-      100% { transform: scale(1);   opacity: 0;   }
+      0% {
+        transform: scale(1);
+        opacity: 0.5;
+      }
+
+      70% {
+        transform: scale(1.9);
+        opacity: 0;
+      }
+
+      100% {
+        transform: scale(1);
+        opacity: 0;
+      }
     }
+
     .my-location-pulse {
       animation: myLocationPulse 2s ease-out infinite;
     }
-    html, body {
+
+    html,
+    body {
       background: transparent !important;
       margin: 0;
       padding: 0;
     }
+
     flt-glass-pane {
       background: transparent !important;
     }
+
     #kakao-map {
       width: 100%;
       height: 100%;
@@ -420,6 +462,7 @@
     }
   </style>
 </head>
+
 <body>
   <!--
     You can customize the "flutter_bootstrap.js" script.
@@ -431,4 +474,5 @@
   -->
   <script src="flutter_bootstrap.js" async></script>
 </body>
+
 </html>
