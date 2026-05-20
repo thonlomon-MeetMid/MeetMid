@@ -9,8 +9,8 @@ class ApiClient {
     _dio = Dio(
       BaseOptions(
         baseUrl: baseUrl,
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(seconds: 30),
+        connectTimeout: const Duration(seconds: 120),
+        receiveTimeout: const Duration(seconds: 120),
         headers: {'Content-Type': 'application/json'},
       ),
     );
@@ -231,15 +231,11 @@ class ApiClient {
     return List<Map<String, dynamic>>.from(res.data['places'] as List);
   }
 
-  Future<Map<String, dynamic>> getMidpoint(String roomId,
-      {String criteria = 'distanceFair', bool polyline = false}) async {
-    final sw = Stopwatch()..start();
-    final params = <String, dynamic>{'criteria': criteria};
-    if (polyline) params['polyline'] = 'true';
-    final res = await _dio.get('/midpoint/$roomId', queryParameters: params);
-    sw.stop();
-    // ignore: avoid_print
-    print('⏱ 중간지점 응답시간: ${sw.elapsedMilliseconds}ms');
+  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair', bool polyline = false}) async {
+    final res = await _dio.get(
+      '/midpoint/$roomId',
+      queryParameters: {'criteria': criteria, 'polyline': polyline ? '1' : '0'},
+    );
     return res.data as Map<String, dynamic>;
   }
 
@@ -266,6 +262,21 @@ class ApiClient {
       return List<Map<String, dynamic>>.from(res.data['locations'] as List);
     } catch (_) {
       return [];
+    }
+  }
+  Future<void> startSearch(String roomId, String criteria) async {
+    try {
+      await _dio.post('/room/$roomId/start-search',
+          queryParameters: {'criteria': criteria});
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> getSearchStatus(String roomId) async {
+    try {
+      final res = await _dio.get('/room/$roomId/search-status');
+      return res.data as Map<String, dynamic>;
+    } catch (_) {
+      return {'started': false, 'criteria': 'distanceFair'};
     }
   }
 }
