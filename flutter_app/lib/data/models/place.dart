@@ -6,6 +6,9 @@ class Place {
   final String address;
   final double rating;
   final bool aiRecommended;
+  final double lat;
+  final double lng;
+  final String url;
 
   const Place({
     required this.id,
@@ -15,37 +18,23 @@ class Place {
     required this.address,
     required this.rating,
     this.aiRecommended = false,
+    this.lat = 0.0,
+    this.lng = 0.0,
+    this.url = '',
   });
-
-  Place copyWith({
-    String? id,
-    String? name,
-    String? category,
-    String? distance,
-    String? address,
-    double? rating,
-    bool? aiRecommended,
-  }) {
-    return Place(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      category: category ?? this.category,
-      distance: distance ?? this.distance,
-      address: address ?? this.address,
-      rating: rating ?? this.rating,
-      aiRecommended: aiRecommended ?? this.aiRecommended,
-    );
-  }
 
   factory Place.fromJson(Map<String, dynamic> json) {
     return Place(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      category: json['category'] as String,
-      distance: json['distance'] as String,
-      address: json['address'] as String,
-      rating: (json['rating'] as num).toDouble(),
+      id: json['id']?.toString() ?? '',
+      name: json['name'] as String? ?? '',
+      category: json['category'] as String? ?? '',
+      distance: json['distance'] as String? ?? '',
+      address: json['address'] as String? ?? '',
+      rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
       aiRecommended: json['aiRecommended'] as bool? ?? false,
+      lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
+      lng: (json['lng'] as num?)?.toDouble() ?? 0.0,
+      url: json['url'] as String? ?? '',
     );
   }
 
@@ -57,5 +46,8 @@ class Place {
         'address': address,
         'rating': rating,
         'aiRecommended': aiRecommended,
+        'lat': lat,
+        'lng': lng,
+        'url': url,
       };
 }

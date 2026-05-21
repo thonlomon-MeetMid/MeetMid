@@ -12,6 +12,7 @@ import '../../data/services/api_client.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../providers/search_provider.dart';
+import '../../providers/place_provider.dart';
 import '../../widgets/common/app_header.dart';
 
 class SearchResultScreen extends ConsumerStatefulWidget {
@@ -212,14 +213,22 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
   Future<void> _loadMemberMarkers() async {
     final criteria = ref.read(searchCriteriaProvider);
+    final prompt = ref.read(searchPromptProvider);
     try {
       final result = await _api.getMidpoint(
         widget.roomId,
         criteria: criteria.name,
         polyline: true,
+        prompt: prompt,
       );
 
       if (!mounted) return;
+
+      // Gemini category/keyword + 중간지점 좌표를 provider에 저장
+      final geminiCategory = result['gemini_category'] as String? ?? '';
+      final geminiKeyword = result['gemini_keyword'] as String? ?? '';
+      ref.read(geminiCategoryProvider.notifier).state = geminiCategory;
+      ref.read(geminiKeywordProvider.notifier).state = geminiKeyword;
 
       final travelTimes = result['travel_times'] as List? ?? [];
       final midpoint = result['midpoint'] as Map<String, dynamic>?;
@@ -228,6 +237,10 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
       final midLat = (midpoint['lat'] as num).toDouble();
       final midLng = (midpoint['lng'] as num).toDouble();
+
+      // 중간지점 좌표 저장
+      ref.read(midpointLatProvider.notifier).state = midLat;
+      ref.read(midpointLngProvider.notifier).state = midLng;
 
       final List<Map<String, dynamic>> positions = [];
       final Map<String, int> minutesMap = {};

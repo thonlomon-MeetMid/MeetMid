@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/models/search_criteria.dart';
+import '../../data/services/api_client.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/common/app_header.dart';
 
@@ -17,11 +18,25 @@ class SearchSettingsScreen extends ConsumerStatefulWidget {
 
 class _SearchSettingsScreenState extends ConsumerState<SearchSettingsScreen> {
   final _geminiCtrl = TextEditingController();
+  final _api = ApiClient();
+
+  @override
+  void initState() {
+    super.initState();
+    _geminiCtrl.text = ref.read(searchPromptProvider);
+  }
 
   @override
   void dispose() {
     _geminiCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _onComplete() async {
+    final prompt = _geminiCtrl.text.trim();
+    ref.read(searchPromptProvider.notifier).state = prompt;
+    await _api.updateRoomPrompt(roomId: widget.roomId, prompt: prompt);
+    if (mounted) context.go('/room/${widget.roomId}');
   }
 
   @override
@@ -113,8 +128,7 @@ class _SearchSettingsScreenState extends ConsumerState<SearchSettingsScreen> {
                                     Text(c.description,
                                         style: const TextStyle(
                                             fontSize: 12,
-                                            color:
-                                                AppColors.textSecondary)),
+                                            color: AppColors.textSecondary)),
                                   ],
                                 ),
                               ],
@@ -129,7 +143,7 @@ class _SearchSettingsScreenState extends ConsumerState<SearchSettingsScreen> {
                     child: Divider(color: AppColors.border, height: 1),
                   ),
 
-                  // ── 어디 가세요? (Gemini 더미) ──
+                  // ── 어디 가세요? ──
                   Row(
                     children: [
                       const Text('어디 가세요?',
@@ -190,7 +204,7 @@ class _SearchSettingsScreenState extends ConsumerState<SearchSettingsScreen> {
               width: double.infinity,
               height: 52,
               child: ElevatedButton(
-                onPressed: () => context.go('/room/${widget.roomId}'),
+                onPressed: _onComplete,
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppColors.primary,
                   foregroundColor: Colors.white,

@@ -601,6 +601,31 @@ async def _travel_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, 
     return max(1, round((distance_km / speed_kmh) * 60))
 
 
+# Gemini 결과 캐시 (prompt → {category, keyword}) — 같은 프롬프트면 재호출 없음
+_GEMINI_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "gemini_cache.json")
+_gemini_prompt_cache: dict = {}
+
+
+def _load_gemini_cache() -> None:
+    try:
+        with open(_GEMINI_CACHE_PATH, encoding="utf-8") as f:
+            _gemini_prompt_cache.update(json.load(f))
+        print(f"[GeminiCache] {len(_gemini_prompt_cache)}개 항목 로드")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[GeminiCache] 로드 오류: {e}")
+
+
+def _save_gemini_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_GEMINI_CACHE_PATH), exist_ok=True)
+        with open(_GEMINI_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_gemini_prompt_cache, f, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        print(f"[GeminiCache] 저장 오류: {e}")
+
+
 async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: float) -> dict | None:
     kakao_key = os.getenv("KAKAO_API_KEY")
     if not kakao_key:
@@ -648,6 +673,107 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
         return result
 
     print("[Landmark] 5000m 내 랜드마크 없음")
+    return None
+
+
+async def _find_place_by_prompt(
+    client: httpx.AsyncClient,
+    lat: float,
+    lng: float,
+    prompt: str,
+) -> dict | None:
+    """Gemini가 프롬프트 전체를 분석해 장소명 추천 → 카카오 키워드 검색으로 좌표 반환."""
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not gemini_key or not kakao_key:
+        return None
+
+    # 캐시 확인
+    cache_key = prompt.strip().lower()
+    place_name = None
+
+    if cache_key in _gemini_prompt_cache:
+        place_name = _gemini_prompt_cache[cache_key].get("place_name")
+        print(f"[Gemini] 캐시 사용: prompt='{prompt}' → place_name='{place_name}'")
+    else:
+        # Gemini에게 프롬프트 전체를 주고 장소 유형명만 반환받기
+        try:
+            gemini_resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash-lite:generateContent?key={gemini_key}",
+                json={
+                    "system_instruction": {"parts": [{"text": (
+                        "당신은 장소 추천 도우미입니다. "
+                        "사용자의 요청을 분석해서 카카오맵에서 검색할 장소 유형을 한국어로 딱 하나만 출력하세요. "
+                        "예시: '소개팅인데 분위기 좋은 곳' → '분위기 카페', "
+                        "'친구들이랑 술 한잔' → '이자카야', "
+                        "'조용히 쉬고 싶어' → '공원', "
+                        "'맛있는 거 먹고 싶어' → '맛집'. "
+                        "장소 유형 외에 다른 말은 절대 출력하지 마세요."
+                    )}]},
+                    "contents": [{"parts": [{"text": f"요청: {prompt}"}]}],
+                    "generationConfig": {"maxOutputTokens": 20, "temperature": 0.2},
+                },
+                timeout=10.0,
+            )
+            gemini_resp.raise_for_status()
+            candidates = gemini_resp.json().get("candidates", [])
+            place_name = (
+                candidates[0]["content"]["parts"][0]["text"].strip()
+                if candidates else ""
+            )
+            if not place_name:
+                return None
+
+            # 캐시 저장
+            _gemini_prompt_cache[cache_key] = {"place_name": place_name}
+            _save_gemini_cache()
+            print(f"[Gemini] 호출 완료: prompt='{prompt}' → place_name='{place_name}'")
+        except Exception as e:
+            print(f"[Gemini] 분석 실패: {e}")
+            return None
+
+    if not place_name:
+        return None
+
+    # 카카오 키워드 검색 (1km → 3km fallback)
+    for radius in [1000, 3000]:
+        try:
+            kakao_resp = await client.get(
+                "https://dapi.kakao.com/v2/local/search/keyword.json",
+                params={
+                    "query": place_name,
+                    "x": lng, "y": lat,
+                    "radius": radius,
+                    "sort": "distance",
+                    "size": 1,
+                },
+                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                timeout=5.0,
+            )
+            kakao_resp.raise_for_status()
+            docs = kakao_resp.json().get("documents", [])
+            # 산/자연 관련 결과 필터링
+            excluded = {"산", "봉", "계곡", "폭포", "등산"}
+            valid_docs = [
+                d for d in docs
+                if not any(ex in d.get("category_name", "") for ex in excluded)
+            ]
+            if valid_docs:
+                doc = valid_docs[0]
+                result = {
+                    "name": doc["place_name"],
+                    "lat": float(doc["y"]),
+                    "lng": float(doc["x"]),
+                    "category": "",
+                    "keyword": place_name,
+                }
+                print(f"[Gemini] 최종 장소: {result['name']} ({result['lat']}, {result['lng']})")
+                return result
+        except Exception as e:
+            print(f"[Gemini] 카카오 검색 실패(radius={radius}): {e}")
+
+    print(f"[Gemini] '{place_name}' 검색 결과 없음")
     return None
 
 
@@ -928,12 +1054,16 @@ class UpdateLocationRequest(BaseModel):
     lng: float | None = None
     shared: bool = True
 
+class UpdateRoomPromptRequest(BaseModel):
+    prompt: str = ""
+
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_subway_file_cache()
+    _load_gemini_cache()
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         app.state.client = client
         yield
@@ -1511,7 +1641,8 @@ async def leave_room(room_id: str, request: Request, data: LeaveRoomRequest):
 @app.get("/midpoint/{room_id}")
 async def get_midpoint(room_id: str, request: Request,
                        criteria: str = Query("distanceFair"),
-                       polyline: bool = Query(False)):
+                       polyline: bool = Query(False),
+                       prompt: str = Query("")):
     client = _client(request)
     try:
         if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
@@ -1555,6 +1686,18 @@ async def get_midpoint(room_id: str, request: Request,
             time_map = {}  # 랜드마크 좌표 기준으로 재계산
         else:
             mid_address = None
+
+        # 프롬프트가 있으면 Gemini로 근처 장소 탐색 → 최종 목적지 대체
+        prompt = prompt.strip()
+        if prompt:
+            print(f"[Midpoint] Gemini 검색 전 좌표: lat={mid_lat}, lng={mid_lng}")
+            place = await _find_place_by_prompt(client, mid_lat, mid_lng, prompt)
+            if place:
+                mid_lat = place["lat"]
+                mid_lng = place["lng"]
+                mid_address = place["name"]
+                time_map = {}  # 새 좌표 기준으로 이동시간 재계산
+                print(f"[Midpoint] Gemini 장소 적용 후 좌표: lat={mid_lat}, lng={mid_lng}, name={mid_address}")
 
         # 이동시간 병렬 계산 (timeFair이고 랜드마크 스냅 없으면 기존 값 재사용)
         if not time_map:
@@ -1684,6 +1827,102 @@ async def get_locations(room_id: str, request: Request):
         ]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 방 프롬프트 저장 ──────────────────────────────────────────────
+
+@app.patch("/room/{room_id}/prompt")
+async def update_room_prompt(room_id: str, request: Request, data: UpdateRoomPromptRequest):
+    client = _client(request)
+    try:
+        if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
+            raise HTTPException(status_code=404, detail="존재하지 않는 방입니다.")
+        await sb_update(client, "rooms", {"prompt": data.prompt}, filters={"id": room_id})
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 장소 추천 ──────────────────────────────────────────────────────
+
+@app.get("/room/{room_id}/places")
+async def get_place_recommendations(
+    room_id: str,
+    request: Request,
+    prompt: str = Query(""),
+    category: str = Query(""),
+    lat: float = Query(0.0),
+    lng: float = Query(0.0),
+    radius: int = Query(1000),
+    size: int = Query(5),
+):
+    """카카오 카테고리/키워드 검색으로 장소 목록 반환 (Gemini 호출 없음 — /midpoint에서 이미 처리)."""
+    client = _client(request)
+    kakao_key = os.getenv("KAKAO_API_KEY")
+
+    if not kakao_key:
+        raise HTTPException(status_code=500, detail="KAKAO_API_KEY가 없습니다.")
+
+    # 좌표가 없으면 방 멤버 중간지점 자동 계산
+    if lat == 0.0 and lng == 0.0:
+        try:
+            members = await _get_members(client, room_id)
+            members_with_addr = [m for m in members if m["address"]]
+            coords_list = await asyncio.gather(*[
+                geocode_address(client, m["address"]) for m in members_with_addr
+            ])
+            located = [{"lat": c[0], "lng": c[1]} for c in coords_list if c]
+            if located:
+                lat = sum(m["lat"] for m in located) / len(located)
+                lng = sum(m["lng"] for m in located) / len(located)
+        except Exception:
+            pass
+
+    valid_codes = {"CE7", "FD6", "CT1", "AT4", "SW8", "CS2"}
+    category_code = category if category in valid_codes else None
+    keyword = prompt.strip() or "카페"
+
+    places = []
+    try:
+        if category_code:
+            resp = await client.get(
+                "https://dapi.kakao.com/v2/local/search/category.json",
+                params={"category_group_code": category_code, "x": lng, "y": lat,
+                        "radius": radius, "sort": "distance", "size": size},
+                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                timeout=5.0,
+            )
+        else:
+            resp = await client.get(
+                "https://dapi.kakao.com/v2/local/search/keyword.json",
+                params={"query": keyword, "x": lng, "y": lat,
+                        "radius": radius, "sort": "distance", "size": size},
+                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                timeout=5.0,
+            )
+        resp.raise_for_status()
+        docs = resp.json().get("documents", [])
+        for i, doc in enumerate(docs):
+            dist_m = float(doc.get("distance", 0))
+            dist_str = f"{int(dist_m)}m" if dist_m < 1000 else f"{dist_m/1000:.1f}km"
+            places.append({
+                "id": doc.get("id", str(i)),
+                "name": doc.get("place_name", ""),
+                "category": doc.get("category_name", "").split(" > ")[-1],
+                "distance": dist_str,
+                "address": doc.get("road_address_name") or doc.get("address_name", ""),
+                "rating": 0.0,
+                "aiRecommended": i == 0,
+                "lat": float(doc.get("y", lat)),
+                "lng": float(doc.get("x", lng)),
+                "url": doc.get("place_url", ""),
+            })
+    except Exception as e:
+        print(f"[Places] 카카오 검색 실패: {e}")
+
+    return {"places": places, "category": category_code, "keyword": keyword}
 
 
 if __name__ == "__main__":

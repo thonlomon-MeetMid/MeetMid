@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import '../models/place.dart';
 
 class ApiClient {
   static const String baseUrl = 'http://127.0.0.1:5000';
@@ -231,12 +232,27 @@ class ApiClient {
     return List<Map<String, dynamic>>.from(res.data['places'] as List);
   }
 
-  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair', bool polyline = false}) async {
-    final res = await _dio.get(
-      '/midpoint/$roomId',
-      queryParameters: {'criteria': criteria, 'polyline': polyline ? '1' : '0'},
-    );
+  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair', bool polyline = false, String prompt = ''}) async {
+    final params = <String, dynamic>{
+      'criteria': criteria,
+      'polyline': polyline ? '1' : '0',
+    };
+    if (prompt.isNotEmpty) params['prompt'] = prompt;
+    final res = await _dio.get('/midpoint/$roomId', queryParameters: params);
     return res.data as Map<String, dynamic>;
+  }
+
+  // 방의 프롬프트를 Supabase에 저장
+  Future<bool> updateRoomPrompt({
+    required String roomId,
+    required String prompt,
+  }) async {
+    try {
+      await _dio.patch('/room/$roomId/prompt', data: {'prompt': prompt});
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> updateLocation({
@@ -264,6 +280,33 @@ class ApiClient {
       return [];
     }
   }
+
+  Future<List<Place>> getPlaceRecommendations({
+    required String roomId,
+    required String prompt,
+    required double lat,
+    required double lng,
+    String category = '',
+    int radius = 1000,
+    int size = 5,
+  }) async {
+    try {
+      final params = <String, dynamic>{
+        'lat': lat,
+        'lng': lng,
+        'radius': radius,
+        'size': size,
+      };
+      if (prompt.isNotEmpty) params['prompt'] = prompt;
+      if (category.isNotEmpty) params['category'] = category;
+      final res = await _dio.get('/room/$roomId/places', queryParameters: params);
+      final docs = res.data['places'] as List? ?? [];
+      return docs.map((e) => Place.fromJson(e as Map<String, dynamic>)).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   Future<void> startSearch(String roomId, String criteria) async {
     try {
       await _dio.post('/room/$roomId/start-search',
