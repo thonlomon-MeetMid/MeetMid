@@ -31,6 +31,26 @@ class PlaceQuery {
     this.category = '',
     this.radius = 1000,
   });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlaceQuery &&
+          roomId == other.roomId &&
+          keyword == other.keyword &&
+          lat == other.lat &&
+          lng == other.lng &&
+          category == other.category &&
+          radius == other.radius;
+
+  @override
+  int get hashCode =>
+      roomId.hashCode ^
+      keyword.hashCode ^
+      lat.hashCode ^
+      lng.hashCode ^
+      category.hashCode ^
+      radius.hashCode;
 }
 
 final placeRecommendProvider =

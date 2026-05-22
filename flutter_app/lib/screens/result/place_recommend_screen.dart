@@ -5,7 +5,6 @@ import '../../core/constants/app_colors.dart';
 import '../../data/models/place.dart';
 import '../../providers/place_provider.dart';
 import '../../providers/search_provider.dart';
-import '../../providers/place_provider.dart';
 import '../../widgets/common/app_header.dart';
 
 class PlaceRecommendScreen extends ConsumerStatefulWidget {
@@ -17,45 +16,64 @@ class PlaceRecommendScreen extends ConsumerStatefulWidget {
       _PlaceRecommendScreenState();
 }
 
-class _PlaceRecommendScreenState
-    extends ConsumerState<PlaceRecommendScreen> {
-  String _selectedCategory = '';
+class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
+  // null = 프롬프트 기반 AI 추천, non-null = 선택된 키워드
+  String? _selectedKeyword;
   int _radius = 1000;
   String? _selectedPlaceId;
 
-  // 반경 옵션
   static const _radiusOptions = [500, 1000, 1500, 2000, 3000];
   static const _radiusLabels = ['500m', '1km', '1.5km', '2km', '3km'];
 
-  // 카테고리 탭 옵션
-  static const _categoryOptions = [
-    {'label': '전체', 'code': ''},
-    {'label': '카페', 'code': 'CE7'},
-    {'label': '음식점', 'code': 'FD6'},
-    {'label': '공원', 'code': 'AT4'},
-    {'label': '영화관', 'code': 'CT1'},
+  static const _suggestedKeywords = [
+    '카페', '음식점', '편의점', '마트', '공원',
+    '영화관', '노래방', '약국', '병원', '은행',
   ];
+
+  // 카카오맵 카테고리 코드 매핑 (코드 있으면 키워드 검색 대신 카테고리 검색)
+  static const _keywordToCategory = {
+    '카페': 'CE7',
+    '음식점': 'FD6',
+    '편의점': 'CS2',
+    '마트': 'MT1',
+    '공원': 'AT4',
+    '영화관': 'CT1',
+    '약국': 'PM9',
+    '병원': 'HP8',
+    '은행': 'BK9',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    // 프롬프트 없으면 첫 번째 키워드(카페) 기본 선택
+    final prompt = ref.read(searchPromptProvider);
+    if (prompt.isEmpty) {
+      _selectedKeyword = _suggestedKeywords.first;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final prompt = ref.watch(searchPromptProvider);
-    final geminiCategory = ref.watch(geminiCategoryProvider);
-    final geminiKeyword = ref.watch(geminiKeywordProvider);
-    final midLat = ref.watch(midpointLatProvider);
-    final midLng = ref.watch(midpointLngProvider);
+    final geminiKeyword = ref.read(geminiKeywordProvider);
+    final midLat = ref.read(midpointLatProvider);
+    final midLng = ref.read(midpointLngProvider);
 
-    // 사용자가 탭 직접 선택 시 우선, 없으면 Gemini 결과 사용
-    final effectiveCategory = _selectedCategory.isNotEmpty
-        ? _selectedCategory
-        : geminiCategory;
-    final effectiveKeyword = geminiKeyword.isNotEmpty ? geminiKeyword : prompt;
+    final effectiveKeyword = _selectedKeyword ??
+        (geminiKeyword.isNotEmpty ? geminiKeyword : prompt);
+
+    // 선택된 키워드에 카테고리 코드가 있으면 카테고리 검색 사용 (음식점/카페 혼용 방지)
+    final categoryCode = _selectedKeyword != null
+        ? (_keywordToCategory[_selectedKeyword] ?? '')
+        : '';
 
     final query = PlaceQuery(
       roomId: widget.roomId,
       keyword: effectiveKeyword,
       lat: midLat,
       lng: midLng,
-      category: effectiveCategory,
+      category: categoryCode,
       radius: _radius,
     );
     final placesAsync = ref.watch(placeRecommendProvider(query));
@@ -66,81 +84,67 @@ class _PlaceRecommendScreenState
         children: [
           const Divider(height: 1, color: AppColors.border),
 
-          // ── AI 배너 ──
+          // ── AI 배너 (프롬프트 있을 때만) ──
           if (prompt.isNotEmpty)
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
               color: AppColors.aiPurpleLight,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
                 children: [
-                  Text('AI 분석 중',
+                  Icon(Icons.auto_awesome,
+                      size: 16, color: AppColors.aiPurple),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '"$prompt" 기반 장소를 찾고 있어요',
                       style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.aiPurple)),
-                  const SizedBox(height: 4),
-                  Text('"$prompt"',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.aiPurpleDark)),
-                  const SizedBox(height: 2),
-                  Text('→ 중간지점 근처에서 맞춤 장소를 찾고 있어요',
-                      style: TextStyle(
-                          fontSize: 12, color: AppColors.aiPurpleText)),
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.aiPurpleDark,
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
 
-          // ── 카테고리 탭 ──
+          // ── 키워드 칩 ──
           Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            padding: const EdgeInsets.fromLTRB(16, 12, 0, 4),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
-                children: _categoryOptions.map((c) {
-                  final selected = _selectedCategory == c['code'];
-                  return GestureDetector(
-                    onTap: () =>
-                        setState(() => _selectedCategory = c['code']!),
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 16),
-                      child: Column(
-                        children: [
-                          Text(
-                            c['label']!,
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: selected
-                                  ? FontWeight.w600
-                                  : FontWeight.normal,
-                              color: selected
-                                  ? AppColors.primary
-                                  : AppColors.textHint,
-                            ),
-                          ),
-                          const SizedBox(height: 4),
-                          Container(
-                              height: 2,
-                              width: 30,
-                              color: selected
-                                  ? AppColors.primary
-                                  : Colors.transparent),
-                        ],
-                      ),
+                children: [
+                  // AI 추천 칩 (프롬프트 있을 때만)
+                  if (prompt.isNotEmpty) ...[
+                    _KeywordChip(
+                      label: 'AI 추천',
+                      icon: Icons.auto_awesome,
+                      selected: _selectedKeyword == null,
+                      isAi: true,
+                      onTap: () => setState(() => _selectedKeyword = null),
                     ),
-                  );
-                }).toList(),
+                    const SizedBox(width: 8),
+                  ],
+                  // 일반 키워드 칩들
+                  ..._suggestedKeywords.map((kw) => Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: _KeywordChip(
+                          label: kw,
+                          selected: _selectedKeyword == kw,
+                          onTap: () =>
+                              setState(() => _selectedKeyword = kw),
+                        ),
+                      )),
+                ],
               ),
             ),
           ),
 
           // ── 반경 필터 ──
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
+            padding: const EdgeInsets.fromLTRB(16, 8, 0, 8),
             child: SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: Row(
@@ -177,8 +181,26 @@ class _PlaceRecommendScreenState
               ),
             ),
           ),
-          const SizedBox(height: 8),
+
           const Divider(height: 1, color: AppColors.border),
+
+          // ── 현재 검색 키워드 표시 ──
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _selectedKeyword == null && prompt.isNotEmpty
+                    ? '"$prompt" 검색 결과'
+                    : '"${_selectedKeyword ?? '전체'}" 검색 결과',
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ),
+          ),
 
           // ── 장소 리스트 ──
           Expanded(
@@ -188,11 +210,23 @@ class _PlaceRecommendScreenState
               error: (_, __) =>
                   const Center(child: Text('장소를 불러올 수 없습니다')),
               data: (places) => places.isEmpty
-                  ? const Center(
-                      child: Text('근처에 해당 장소가 없습니다',
-                          style: TextStyle(
-                              fontSize: 14,
-                              color: AppColors.textSecondary)))
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.search_off,
+                              size: 48, color: AppColors.textHint),
+                          const SizedBox(height: 12),
+                          Text(
+                            '근처에 해당 장소가 없어요\n반경을 늘리거나 다른 키워드를 선택해보세요',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    )
                   : ListView.separated(
                       itemCount: places.length,
                       separatorBuilder: (_, __) => const Divider(
@@ -246,8 +280,7 @@ class _PlaceRecommendScreenState
       onTap: () => setState(() => _selectedPlaceId = place.id),
       child: Container(
         color: selected ? AppColors.primaryLight : Colors.transparent,
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         child: Row(
           children: [
             Container(
@@ -258,9 +291,7 @@ class _PlaceRecommendScreenState
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
-                place.aiRecommended
-                    ? Icons.auto_awesome
-                    : Icons.place,
+                place.aiRecommended ? Icons.auto_awesome : Icons.place,
                 color: place.aiRecommended
                     ? AppColors.aiPurple
                     : AppColors.textHint,
@@ -302,15 +333,13 @@ class _PlaceRecommendScreenState
                   Text(
                     '${place.distance} · ${place.category}',
                     style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary),
+                        fontSize: 12, color: AppColors.textSecondary),
                   ),
                   if (place.address.isNotEmpty)
                     Text(
                       place.address,
                       style: const TextStyle(
-                          fontSize: 11,
-                          color: AppColors.textHint),
+                          fontSize: 11, color: AppColors.textHint),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -320,6 +349,60 @@ class _PlaceRecommendScreenState
             if (selected)
               const Icon(Icons.check_circle,
                   color: AppColors.primary, size: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _KeywordChip extends StatelessWidget {
+  final String label;
+  final IconData? icon;
+  final bool selected;
+  final bool isAi;
+  final VoidCallback onTap;
+
+  const _KeywordChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.icon,
+    this.isAi = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = isAi && selected
+        ? AppColors.aiPurple
+        : selected
+            ? AppColors.primary
+            : AppColors.backgroundLight;
+    final fg = selected ? Colors.white : AppColors.textSecondary;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? Colors.transparent : AppColors.border,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (icon != null) ...[
+              Icon(icon, size: 14, color: fg),
+              const SizedBox(width: 4),
+            ],
+            Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w500,
+                    color: fg)),
           ],
         ),
       ),

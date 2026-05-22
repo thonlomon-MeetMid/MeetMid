@@ -35,6 +35,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   String _midAddress = '중간 지점';
   Map<String, int> _memberMinutes = {};
   Offset? _lastFocalPoint;
+  bool _promptFailed = false;
 
   // 실시간 위치 공유
   bool _locationShared = false;
@@ -229,6 +230,18 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       final geminiKeyword = result['gemini_keyword'] as String? ?? '';
       ref.read(geminiCategoryProvider.notifier).state = geminiCategory;
       ref.read(geminiKeywordProvider.notifier).state = geminiKeyword;
+
+      // 프롬프트 입력했지만 관련 장소를 못 찾은 경우
+      if (prompt.isNotEmpty && geminiKeyword.isEmpty && mounted) {
+        setState(() => _promptFailed = true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('관련 장소를 찾지 못해 기본 중간지점으로 표시했어요'),
+            duration: Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
 
       final travelTimes = result['travel_times'] as List? ?? [];
       final midpoint = result['midpoint'] as Map<String, dynamic>?;
@@ -458,6 +471,22 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                         color: AppColors.textDark,
                       ),
                     ),
+                    if (_promptFailed) ...[
+                      const SizedBox(height: 4),
+                      Row(
+                        children: const [
+                          Icon(Icons.search_off, size: 13, color: Colors.orange),
+                          SizedBox(width: 4),
+                          Text(
+                            '검색 결과 없음',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.orange,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 4),
                     Text(
                       '기준: ${criteria.label}',
