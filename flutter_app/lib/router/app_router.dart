@@ -22,6 +22,8 @@ import '../screens/result/share_result_screen.dart';
 final _rootNavigatorKey = GlobalKey<NavigatorState>();
 final _shellNavigatorKey = GlobalKey<NavigatorState>();
 
+// auth 상태 변화를 GoRouter에 알려주는 notifier
+// ref.watch 대신 이 방식을 써야 라우터 인스턴스가 재생성되지 않음
 class _AuthNotifier extends ChangeNotifier {
   _AuthNotifier(this._ref) {
     _ref.listen<AuthState>(authProvider, (_, _) => notifyListeners());
@@ -46,7 +48,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       return null;
     },
     routes: [
-      // ── Auth routes ──────────────────────────────────────────
+      // Auth routes
       GoRoute(
         path: '/auth/login',
         builder: (context, state) => const LoginScreen(),
@@ -64,7 +66,7 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (context, state) => const FindPwScreen(),
       ),
 
-      // ── Main shell with bottom nav ───────────────────────────
+      // Main shell with bottom nav
       ShellRoute(
         navigatorKey: _shellNavigatorKey,
         builder: (context, state, child) => MainShell(child: child),
@@ -84,13 +86,13 @@ final routerProvider = Provider<GoRouter>((ref) {
         ],
       ),
 
-      // ── Settings ─────────────────────────────────────────────
+      // Settings
       GoRoute(
         path: '/settings',
         builder: (context, state) => const SettingsScreen(),
       ),
 
-      // ── Room routes ──────────────────────────────────────────
+      // Room routes
       GoRoute(
         path: '/room/create',
         builder: (context, state) => const CreateRoomScreen(),
@@ -112,33 +114,31 @@ final routerProvider = Provider<GoRouter>((ref) {
               memberId: state.pathParameters['memberId']!,
             ),
           ),
+          GoRoute(
+            path: 'search-settings',
+            builder: (context, state) => SearchSettingsScreen(
+              roomId: state.pathParameters['roomId']!,
+            ),
+          ),
+          GoRoute(
+            path: 'search-result',
+            builder: (context, state) => SearchResultScreen(
+              roomId: state.pathParameters['roomId']!,
+            ),
+          ),
+          GoRoute(
+            path: 'recommend',
+            builder: (context, state) => PlaceRecommendScreen(
+              roomId: state.pathParameters['roomId']!,
+            ),
+          ),
+          GoRoute(
+            path: 'share',
+            builder: (context, state) => ShareResultScreen(
+              roomId: state.pathParameters['roomId']!,
+            ),
+          ),
         ],
-      ),
-
-      // ── 독립 화면으로 분리 (RoomDetailScreen 위에 full-screen) ──
-      GoRoute(
-        path: '/room/:roomId/search-settings',
-        builder: (context, state) => SearchSettingsScreen(
-          roomId: state.pathParameters['roomId']!,
-        ),
-      ),
-      GoRoute(
-        path: '/room/:roomId/search-result',
-        builder: (context, state) => SearchResultScreen(
-          roomId: state.pathParameters['roomId']!,
-        ),
-      ),
-      GoRoute(
-        path: '/room/:roomId/recommend',
-        builder: (context, state) => PlaceRecommendScreen(
-          roomId: state.pathParameters['roomId']!,
-        ),
-      ),
-      GoRoute(
-        path: '/room/:roomId/share',
-        builder: (context, state) => ShareResultScreen(
-          roomId: state.pathParameters['roomId']!,
-        ),
       ),
     ],
   );
