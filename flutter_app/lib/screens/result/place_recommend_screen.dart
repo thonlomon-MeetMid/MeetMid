@@ -1,3 +1,5 @@
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:js' as js;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -22,12 +24,11 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
   int _radius = 1000;
   String? _selectedPlaceId;
 
-  static const _radiusOptions = [500, 1000, 1500, 2000, 3000];
-  static const _radiusLabels = ['500m', '1km', '1.5km', '2km', '3km'];
+  static const _radiusOptions = [500, 1000, 3000, 5000];
+  static const _radiusLabels = ['500m', '1km', '3km', '5km'];
 
   static const _suggestedKeywords = [
-    '카페', '음식점', '편의점', '마트', '공원',
-    '영화관', '노래방', '약국', '병원', '은행',
+    '카페', '음식점', '술집', '편의점', '공원', '영화관', '노래방',
   ];
 
   // 카카오맵 카테고리 코드 매핑 (코드 있으면 키워드 검색 대신 카테고리 검색)
@@ -35,12 +36,16 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
     '카페': 'CE7',
     '음식점': 'FD6',
     '편의점': 'CS2',
-    '마트': 'MT1',
     '공원': 'AT4',
     '영화관': 'CT1',
-    '약국': 'PM9',
-    '병원': 'HP8',
-    '은행': 'BK9',
+  };
+
+  // 반경 단계별 최소 거리 (이전 단계 결과 중복 제거)
+  static const _radiusMinMap = {
+    500: 0,
+    1000: 500,
+    3000: 1000,
+    5000: 3000,
   };
 
   @override
@@ -60,13 +65,12 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
     final midLat = ref.read(midpointLatProvider);
     final midLng = ref.read(midpointLngProvider);
 
+    // geminiKeyword 우선, 없으면 기본 키워드(카페) — 원문 프롬프트를 카카오에 직접 보내지 않음
     final effectiveKeyword = _selectedKeyword ??
-        (geminiKeyword.isNotEmpty ? geminiKeyword : prompt);
+        (geminiKeyword.isNotEmpty ? geminiKeyword : _suggestedKeywords.first);
 
-    // 선택된 키워드에 카테고리 코드가 있으면 카테고리 검색 사용 (음식점/카페 혼용 방지)
-    final categoryCode = _selectedKeyword != null
-        ? (_keywordToCategory[_selectedKeyword] ?? '')
-        : '';
+    // 선택된 키워드 또는 effectiveKeyword에 카테고리 코드가 있으면 카테고리 검색 사용
+    final categoryCode = _keywordToCategory[effectiveKeyword] ?? '';
 
     final query = PlaceQuery(
       roomId: widget.roomId,
@@ -75,6 +79,7 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
       lng: midLng,
       category: categoryCode,
       radius: _radius,
+      minRadius: _radiusMinMap[_radius] ?? 0,
     );
     final placesAsync = ref.watch(placeRecommendProvider(query));
 
@@ -249,9 +254,13 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
               child: ElevatedButton(
                 onPressed: _selectedPlaceId != null
                     ? () {
-                        ref
-                            .read(selectedPlaceIdProvider.notifier)
-                            .state = _selectedPlaceId;
+                        final places =
+                            ref.read(placeRecommendProvider(query)).valueOrNull ?? [];
+                        final selected = places.where((p) => p.id == _selectedPlaceId).toList();
+                        if (selected.isNotEmpty) {
+                          ref.read(selectedPlaceProvider.notifier).state = selected.first;
+                        }
+                        ref.read(selectedPlaceIdProvider.notifier).state = _selectedPlaceId;
                         context.push('/room/${widget.roomId}/share');
                       }
                     : null,
@@ -277,7 +286,12 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
   Widget _placeTile(Place place) {
     final selected = _selectedPlaceId == place.id;
     return GestureDetector(
-      onTap: () => setState(() => _selectedPlaceId = place.id),
+      onTap: () {
+        setState(() => _selectedPlaceId = place.id);
+        try {
+          js.context.callMethod('flutterMoveMap', [place.lat, place.lng, 4]);
+        } catch (_) {}
+      },
       child: Container(
         color: selected ? AppColors.primaryLight : Colors.transparent,
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
@@ -290,11 +304,9 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
                 color: AppColors.backgroundLight,
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(
-                place.aiRecommended ? Icons.auto_awesome : Icons.place,
-                color: place.aiRecommended
-                    ? AppColors.aiPurple
-                    : AppColors.textHint,
+              child: const Icon(
+                Icons.place,
+                color: AppColors.textHint,
                 size: 22,
               ),
             ),
@@ -303,32 +315,11 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(place.name,
-                            style: const TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                                color: AppColors.textDark)),
-                      ),
-                      if (place.aiRecommended) ...[
-                        const SizedBox(width: 6),
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                              color: AppColors.aiPurpleLight,
-                              borderRadius: BorderRadius.circular(4)),
-                          child: Text('AI',
-                              style: TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: AppColors.aiPurple)),
-                        ),
-                      ],
-                    ],
-                  ),
+                  Text(place.name,
+                      style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textDark)),
                   const SizedBox(height: 2),
                   Text(
                     '${place.distance} · ${place.category}',

@@ -170,6 +170,7 @@ class _SearchSettingsScreenState extends ConsumerState<SearchSettingsScreen> {
                   const SizedBox(height: 10),
                   TextField(
                     controller: _geminiCtrl,
+                    maxLength: 20,
                     maxLines: 2,
                     minLines: 1,
                     style: const TextStyle(fontSize: 14),

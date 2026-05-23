@@ -11,6 +11,7 @@ class PlaceRepository {
     required double lng,
     String category = '',
     int radius = 1000,
+    int minRadius = 0,
     int size = 5,
   }) async {
     return _api.getPlaceRecommendations(
@@ -20,6 +21,7 @@ class PlaceRepository {
       lng: lng,
       category: category,
       radius: radius,
+      minRadius: minRadius,
       size: size,
     );
   }

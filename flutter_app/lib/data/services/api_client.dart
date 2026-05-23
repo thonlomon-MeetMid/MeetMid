@@ -242,6 +242,18 @@ class ApiClient {
     return res.data as Map<String, dynamic>;
   }
 
+  Future<List<dynamic>> getPolylines(String roomId, {required double lat, required double lng}) async {
+    try {
+      final res = await _dio.get(
+        '/midpoint/$roomId/polylines',
+        queryParameters: {'lat': lat, 'lng': lng},
+      );
+      return res.data['polylines'] as List? ?? [];
+    } catch (_) {
+      return [];
+    }
+  }
+
   // 방의 프롬프트를 Supabase에 저장
   Future<bool> updateRoomPrompt({
     required String roomId,
@@ -288,6 +300,7 @@ class ApiClient {
     required double lng,
     String category = '',
     int radius = 1000,
+    int minRadius = 0,
     int size = 5,
   }) async {
     try {
@@ -297,6 +310,7 @@ class ApiClient {
         'radius': radius,
         'size': size,
       };
+      if (minRadius > 0) params['min_radius'] = minRadius;
       if (prompt.isNotEmpty) params['prompt'] = prompt;
       if (category.isNotEmpty) params['category'] = category;
       final res = await _dio.get('/room/$roomId/places', queryParameters: params);

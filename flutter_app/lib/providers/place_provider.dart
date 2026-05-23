@@ -7,13 +7,16 @@ final apiClientProvider = Provider((ref) => ApiClient());
 final placeRepositoryProvider = Provider((ref) => PlaceRepository());
 
 // /midpoint 응답에서 받은 Gemini 카테고리/키워드 저장
-// → /places 호출 시 재사용 (Gemini 중복 호출 방지)
 final geminiCategoryProvider = StateProvider<String>((ref) => '');
 final geminiKeywordProvider = StateProvider<String>((ref) => '');
 
-// 중간지점 좌표 저장 (place_recommend_screen에서 재사용)
+// 중간지점 좌표 + 주소 저장
 final midpointLatProvider = StateProvider<double>((ref) => 0.0);
 final midpointLngProvider = StateProvider<double>((ref) => 0.0);
+final midpointAddressProvider = StateProvider<String>((ref) => '');
+
+// 장소 확정 시 선택된 Place 전체 저장
+final selectedPlaceProvider = StateProvider<Place?>((ref) => null);
 
 class PlaceQuery {
   final String roomId;
@@ -22,6 +25,7 @@ class PlaceQuery {
   final double lng;
   final String category;
   final int radius;
+  final int minRadius;
 
   const PlaceQuery({
     required this.roomId,
@@ -30,6 +34,7 @@ class PlaceQuery {
     required this.lng,
     this.category = '',
     this.radius = 1000,
+    this.minRadius = 0,
   });
 
   @override
@@ -41,7 +46,8 @@ class PlaceQuery {
           lat == other.lat &&
           lng == other.lng &&
           category == other.category &&
-          radius == other.radius;
+          radius == other.radius &&
+          minRadius == other.minRadius;
 
   @override
   int get hashCode =>
@@ -50,7 +56,8 @@ class PlaceQuery {
       lat.hashCode ^
       lng.hashCode ^
       category.hashCode ^
-      radius.hashCode;
+      radius.hashCode ^
+      minRadius.hashCode;
 }
 
 final placeRecommendProvider =
@@ -63,5 +70,6 @@ final placeRecommendProvider =
     lng: q.lng,
     category: q.category,
     radius: q.radius,
+    minRadius: q.minRadius,
   );
 });
