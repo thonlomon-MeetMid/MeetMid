@@ -18,6 +18,9 @@ final midpointAddressProvider = StateProvider<String>((ref) => '');
 // 장소 확정 시 선택된 Place 전체 저장
 final selectedPlaceProvider = StateProvider<Place?>((ref) => null);
 
+// 공유 화면 닫힐 때 결과 화면 지도 뷰포트 재적용 신호
+final mapViewportTickProvider = StateProvider<int>((ref) => 0);
+
 class PlaceQuery {
   final String roomId;
   final String keyword;

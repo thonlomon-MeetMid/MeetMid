@@ -9,6 +9,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
 import '../../data/services/api_client.dart';
+import '../../data/models/place.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../providers/search_provider.dart';
@@ -45,6 +46,11 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   @override
   void initState() {
     super.initState();
+    // 새 탐색 시작 시 이전 장소 선택 초기화 (빌드 완료 후 실행)
+    Future.microtask(() {
+      ref.read(selectedPlaceProvider.notifier).state = null;
+      ref.read(selectedPlaceIdProvider.notifier).state = null;
+    });
     WidgetsBinding.instance.addPostFrameCallback((_) => _startMapInit());
   }
 
@@ -154,6 +160,28 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     if (!mounted) return;
     try {
       js.context.callMethod('flutterSetLiveLocations', [jsonEncode(locations)]);
+    } catch (_) {}
+  }
+
+  // ── 선택된 장소로 경로 업데이트 ────────────────────────────────
+  Future<void> _updatePolylinesForPlace(Place place) async {
+    final rawPolylines = await _api.getPolylines(
+      widget.roomId,
+      lat: place.lat,
+      lng: place.lng,
+    );
+    if (!mounted || rawPolylines.isEmpty) return;
+    final polylineData = <Map<String, dynamic>>[];
+    for (int i = 0; i < rawPolylines.length; i++) {
+      final p = rawPolylines[i] as Map<String, dynamic>;
+      polylineData.add({
+        'name': p['name'],
+        'coords': p['coords'],
+        'color': _kRouteColors[i % _kRouteColors.length],
+      });
+    }
+    try {
+      js.context.callMethod('flutterDrawPolylines', [jsonEncode(polylineData)]);
     } catch (_) {}
   }
 
@@ -392,6 +420,17 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       orElse: () => rooms.first,
     );
     final criteria = ref.watch(searchCriteriaProvider);
+    final selectedPlace = ref.watch(selectedPlaceProvider);
+
+    // 장소 선택 시 목적지 마커 + 경로 업데이트
+    ref.listen(selectedPlaceProvider, (prev, next) {
+      if (next != null && (prev == null || prev.id != next.id)) {
+        try {
+          js.context.callMethod('flutterMoveMidpointMarker', [next.lat, next.lng, next.name]);
+        } catch (_) {}
+        _updatePolylinesForPlace(next);
+      }
+    });
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -451,8 +490,10 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                     const Divider(color: AppColors.border),
                     const SizedBox(height: 8),
                     Text(
-                      '중간지점: $_midAddress',
-                      style: TextStyle(
+                      selectedPlace != null
+                          ? '목적지: ${selectedPlace.name}'
+                          : '중간지점: $_midAddress',
+                      style: const TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
                         color: AppColors.textDark,

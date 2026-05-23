@@ -18,6 +18,10 @@ class ShareResultScreen extends ConsumerWidget {
     final roomMatches = rooms.where((r) => r.id == roomId);
     final roomName = roomMatches.isNotEmpty ? roomMatches.first.name : '모임';
 
+    final destinationName = selectedPlace != null
+        ? selectedPlace.name
+        : (midAddress.isNotEmpty ? midAddress : '중간 지점');
+
     return Scaffold(
       backgroundColor: AppColors.backgroundGray,
       appBar: const AppHeader(title: '결과 공유'),
@@ -25,7 +29,6 @@ class ShareResultScreen extends ConsumerWidget {
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
-            // 결과 카드
             Container(
               width: double.infinity,
               padding: const EdgeInsets.all(20),
@@ -43,7 +46,6 @@ class ShareResultScreen extends ConsumerWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 방 이름 레이블
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                     decoration: BoxDecoration(
@@ -60,10 +62,8 @@ class ShareResultScreen extends ConsumerWidget {
                     ),
                   ),
                   const SizedBox(height: 14),
-
-                  // 중간지점 주소
                   Text(
-                    midAddress.isNotEmpty ? midAddress : '중간 지점',
+                    destinationName,
                     style: const TextStyle(
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -78,8 +78,6 @@ class ShareResultScreen extends ConsumerWidget {
                       color: AppColors.textSecondary,
                     ),
                   ),
-
-                  // 선택된 장소 카드
                   if (selectedPlace != null) ...[
                     const SizedBox(height: 16),
                     Container(

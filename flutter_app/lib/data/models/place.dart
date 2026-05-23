@@ -5,6 +5,7 @@ class Place {
   final String distance;
   final String address;
   final double rating;
+  final int reviewCount;
   final bool aiRecommended;
   final double lat;
   final double lng;
@@ -17,6 +18,7 @@ class Place {
     required this.distance,
     required this.address,
     required this.rating,
+    this.reviewCount = 0,
     this.aiRecommended = false,
     this.lat = 0.0,
     this.lng = 0.0,
@@ -31,6 +33,7 @@ class Place {
       distance: json['distance'] as String? ?? '',
       address: json['address'] as String? ?? '',
       rating: (json['rating'] as num?)?.toDouble() ?? 0.0,
+      reviewCount: (json['reviewCount'] as num?)?.toInt() ?? 0,
       aiRecommended: json['aiRecommended'] as bool? ?? false,
       lat: (json['lat'] as num?)?.toDouble() ?? 0.0,
       lng: (json['lng'] as num?)?.toDouble() ?? 0.0,

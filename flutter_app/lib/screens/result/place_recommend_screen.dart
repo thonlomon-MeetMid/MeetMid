@@ -261,7 +261,7 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
                           ref.read(selectedPlaceProvider.notifier).state = selected.first;
                         }
                         ref.read(selectedPlaceIdProvider.notifier).state = _selectedPlaceId;
-                        context.push('/room/${widget.roomId}/share');
+                        context.pop();
                       }
                     : null,
                 style: ElevatedButton.styleFrom(
@@ -290,6 +290,7 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
         setState(() => _selectedPlaceId = place.id);
         try {
           js.context.callMethod('flutterMoveMap', [place.lat, place.lng, 4]);
+          js.context.callMethod('flutterMoveMidpointMarker', [place.lat, place.lng, place.name]);
         } catch (_) {}
       },
       child: Container(
@@ -321,10 +322,24 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
                           fontWeight: FontWeight.w600,
                           color: AppColors.textDark)),
                   const SizedBox(height: 2),
-                  Text(
-                    '${place.distance} · ${place.category}',
-                    style: const TextStyle(
-                        fontSize: 12, color: AppColors.textSecondary),
+                  Row(
+                    children: [
+                      Text(
+                        '${place.distance} · ${place.category}',
+                        style: const TextStyle(
+                            fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                      if (place.rating > 0) ...[
+                        const SizedBox(width: 6),
+                        const Icon(Icons.star, size: 11, color: Color(0xFFFFC107)),
+                        const SizedBox(width: 2),
+                        Text(
+                          '${place.rating.toStringAsFixed(1)}${place.reviewCount > 0 ? ' (${place.reviewCount})' : ''}',
+                          style: const TextStyle(
+                              fontSize: 11, color: AppColors.textSecondary),
+                        ),
+                      ],
+                    ],
                   ),
                   if (place.address.isNotEmpty)
                     Text(

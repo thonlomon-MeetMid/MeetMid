@@ -629,7 +629,7 @@ _KW_TO_CODE = {"음식점": "FD6", "카페": "CE7", "편의점": "CS2", "맛집"
 
 # Gemini 호출 없이 바로 카카오 검색 가능한 단순 키워드 (Gemini 타임아웃 방지)
 _DIRECT_KEYWORDS = {
-    "카페", "음식점", "편의점", "술집", "이자카야", "호프", "포차",
+    "카페", "음식점", "맛집", "편의점", "술집", "이자카야", "호프", "포차",
     "노래방", "볼링장", "볼링", "방탈출카페", "방탈출", "영화관",
     "미술관", "박물관", "공원", "마트", "쇼핑몰",
     "북카페", "스터디카페", "키즈카페", "감성카페", "한옥카페", "루프탑카페",
@@ -725,6 +725,34 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
 
     print("[Landmark] 5000m 내 랜드마크 없음")
     return None
+
+
+async def _get_google_place_rating(client: httpx.AsyncClient, name: str, lat: float, lng: float) -> tuple[float, int]:
+    """Google Places API로 장소 평점/리뷰 수 조회. 실패 시 (0.0, 0) 반환."""
+    api_key = os.getenv("PLACE_API_KEY")
+    if not api_key or not name:
+        return 0.0, 0
+    try:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+            params={
+                "input": name,
+                "inputtype": "textquery",
+                "fields": "rating,user_ratings_total",
+                "locationbias": f"point:{lat},{lng}",
+                "key": api_key,
+            },
+            timeout=3.0,
+        )
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if candidates:
+            rating = float(candidates[0].get("rating", 0.0) or 0.0)
+            count = int(candidates[0].get("user_ratings_total", 0) or 0)
+            return round(rating, 1), count
+        return 0.0, 0
+    except Exception:
+        return 0.0, 0
 
 
 _GEMINI_PARTICLES = ['입니다', '이에요', '예요', '이다', '으로', '로', '에서', '를', '을', '이가', '가', '이', '은', '는', '도', '만']
@@ -1016,12 +1044,20 @@ async def _find_place_by_prompt(
                     if not any(ex in d.get("category_name", "") for ex in excluded | set(extra_excluded))
                 ]
                 if valid_docs:
-                    doc = _best_doc(valid_docs, search_kw)
-                    if doc is None:
-                        if category_code:
-                            doc = valid_docs[0]
-                        else:
-                            continue
+                    # 평점 병렬 조회 → 평점 있는 것 중 최고점 선택
+                    ratings = await asyncio.gather(*[
+                        _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in valid_docs
+                    ])
+                    rated_pairs = [(d, r) for d, r in zip(valid_docs, ratings) if r[0] > 0]
+                    if rated_pairs:
+                        doc = max(rated_pairs, key=lambda x: x[1][0])[0]
+                    else:
+                        doc = _best_doc(valid_docs, search_kw)
+                        if doc is None:
+                            if category_code:
+                                doc = valid_docs[0]
+                            else:
+                                continue
                     result = {
                         "name": doc["place_name"],
                         "lat": float(doc["y"]),
@@ -2226,12 +2262,13 @@ async def get_place_recommendations(
             except Exception as e:
                 print(f"[Places] 카카오 검색 실패(radius={r}): {e}")
 
-        # 결과 없으면 fallback 키워드(카테고리)로 재시도 — "분위기카페" 같은 복합어 대응
-        if not docs and not category_code:
+        # 1차 fallback: 비슷한 카테고리로 재시도 (카테고리 코드 있어도 실패 시 포함)
+        fallback_kw: str | None = None
+        if not docs:
             fallback_kw = _get_fallback_keyword(keyword)
             fallback_code = _KW_TO_CODE.get(fallback_kw) if fallback_kw else None
-            if fallback_kw or fallback_code:
-                print(f"[Places] '{keyword}' 결과 없음 → fallback '{fallback_kw}' 재시도")
+            if fallback_kw and fallback_kw != keyword:
+                print(f"[Places] '{keyword}' 결과 없음 → 1차 fallback '{fallback_kw}' 재시도")
                 for r in search_radii:
                     try:
                         if fallback_code:
@@ -2256,7 +2293,35 @@ async def get_place_recommendations(
                             exclude_keywords = category_excludes.get(fallback_code or "", [])
                             break
                     except Exception as e:
-                        print(f"[Places] fallback 검색 실패(radius={r}): {e}")
+                        print(f"[Places] 1차 fallback 검색 실패(radius={r}): {e}")
+
+        # 2차 fallback: 규칙 없는 키워드도 문맥으로 대분류 시도
+        _FOOD_HINTS = {"음식", "식당", "맛집", "레스토랑", "먹", "요리", "한식", "일식", "중식", "양식"}
+        _CAFE_HINTS = {"카페", "커피", "디저트", "케이크", "브런치", "베이커리"}
+        if not docs:
+            kw_lower = keyword.lower()
+            fb2_code: str | None = None
+            if any(h in kw_lower for h in _CAFE_HINTS) or (fallback_kw and any(h in fallback_kw for h in _CAFE_HINTS)):
+                fb2_code = "CE7"
+            elif any(h in kw_lower for h in _FOOD_HINTS) or (fallback_kw and any(h in fallback_kw for h in _FOOD_HINTS)):
+                fb2_code = "FD6"
+            if fb2_code and fb2_code != category_code:
+                print(f"[Places] '{keyword}' 2차 fallback → 카테고리 {fb2_code}")
+                for r in search_radii:
+                    try:
+                        fb_resp = await client.get(
+                            "https://dapi.kakao.com/v2/local/search/category.json",
+                            params={"category_group_code": fb2_code, "x": lng, "y": lat,
+                                    "radius": r, "sort": "distance", "size": size},
+                            headers={"Authorization": f"KakaoAK {kakao_key}"},
+                            timeout=5.0,
+                        )
+                        fb_resp.raise_for_status()
+                        docs = fb_resp.json().get("documents", [])
+                        if docs:
+                            break
+                    except Exception as e:
+                        print(f"[Places] 2차 fallback 검색 실패(radius={r}): {e}")
 
         # min_radius 필터 적용, 결과가 다 걸러지면 min_radius 제거
         filtered_docs = [
@@ -2270,7 +2335,22 @@ async def get_place_recommendations(
                 if not any(ex in d.get("category_name", "") for ex in exclude_keywords)
             ]
 
+        # 평점 병렬 조회
+        ratings_list: list[tuple[float, int]] = [(0.0, 0)] * len(filtered_docs)
+        if filtered_docs:
+            fetched = await asyncio.gather(*[
+                _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in filtered_docs
+            ])
+            ratings_list = list(fetched)
+            # 평점 있는 결과가 하나라도 있으면 평점 내림차순 정렬
+            if any(r[0] > 0 for r in ratings_list):
+                paired = sorted(zip(filtered_docs, ratings_list),
+                                key=lambda x: x[1][0], reverse=True)
+                filtered_docs = [d for d, _ in paired]
+                ratings_list = [r for _, r in paired]
+
         for i, doc in enumerate(filtered_docs):
+            rating, review_cnt = ratings_list[i]
             dist_m = float(doc.get("distance", 0))
             dist_str = f"{int(dist_m)}m" if dist_m < 1000 else f"{dist_m/1000:.1f}km"
             places.append({
@@ -2279,7 +2359,8 @@ async def get_place_recommendations(
                 "category": doc.get("category_name", "").split(" > ")[-1],
                 "distance": dist_str,
                 "address": doc.get("road_address_name") or doc.get("address_name", ""),
-                "rating": 0.0,
+                "rating": rating,
+                "reviewCount": review_cnt,
                 "aiRecommended": False,
                 "lat": float(doc.get("y", lat)),
                 "lng": float(doc.get("x", lng)),
