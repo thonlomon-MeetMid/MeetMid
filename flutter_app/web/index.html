@@ -87,7 +87,7 @@
     _tryInitKakaoMaps();
 
     function flutterCreateKakaoMapInBody(lat, lng) {
-      window._kakaoMapCancelled = true;
+      window._kakaoMapCancelled = false;
       window._kakaoMapPendingCreate = null;
 
       var existing = document.getElementById('_flutter_kakao_map');

@@ -33,7 +33,24 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
   @override
   void initState() {
     super.initState();
+    // 이전 지도 상태 초기화
+    try {
+      js.context['_kakaoMapCancelled'] = false;
+      js.context['_kakaoMapPendingCreate'] = null;
+    } catch (_) {}
+    _mapInitStarted = false;
     WidgetsBinding.instance.addPostFrameCallback((_) => _startMapInit());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    debugPrint('didChangeDependencies 호출됨 / mapReady: ${js.context['_kakaoMapReady']} / mapLoading: $_mapLoading');
+    if (js.context['_kakaoMapReady'] != true && !_mapLoading) {
+      setState(() => _mapLoading = true);
+      _mapInitStarted = false;
+      _startMapInit();
+    }
   }
 
   @override
@@ -67,8 +84,9 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
         if (permission == LocationPermission.whileInUse ||
             permission == LocationPermission.always) {
           final position = await Geolocator.getCurrentPosition(
-            locationSettings:
-                const LocationSettings(accuracy: LocationAccuracy.high),
+            locationSettings: const LocationSettings(
+              accuracy: LocationAccuracy.high,
+            ),
           ).timeout(const Duration(seconds: 6));
           lat = position.latitude;
           lng = position.longitude;
@@ -83,7 +101,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
   }
 
   Future<void> _pollMapReady() async {
-    for (int i = 0; i < 25; i++) {
+    for (int i = 0; i < 50; i++) {
       await Future.delayed(const Duration(milliseconds: 200));
       if (!mounted) return;
       if (js.context['_kakaoMapReady'] == true) {
@@ -119,15 +137,15 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     }
   }
 
-
   Future<void> _getCurrentLocation() async {
     setState(() => _locationLoading = true);
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('위치 서비스를 켜주세요')));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('위치 서비스를 켜주세요')));
         }
         return;
       }
@@ -137,22 +155,26 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('위치 권한을 허용해주세요')));
+            ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('위치 권한을 허용해주세요')));
           }
           return;
         }
       }
       if (permission == LocationPermission.deniedForever) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')));
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')));
         }
         return;
       }
 
       final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
       );
       if (mounted) {
         setState(() {
@@ -161,19 +183,25 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
         });
         _moveMapTo(position.latitude, position.longitude);
         try {
-          js.context.callMethod('flutterUpdateMyLocation',
-              [position.latitude, position.longitude]);
+          js.context.callMethod('flutterUpdateMyLocation', [
+            position.latitude,
+            position.longitude,
+          ]);
         } catch (_) {}
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(
-              '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}'),
-          duration: const Duration(seconds: 2),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
+            ),
+            duration: const Duration(seconds: 2),
+          ),
+        );
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('위치를 가져올 수 없습니다')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('위치를 가져올 수 없습니다')));
       }
     } finally {
       if (mounted) setState(() => _locationLoading = false);
@@ -200,15 +228,18 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
               behavior: HitTestBehavior.translucent,
               onPointerMove: (event) {
                 try {
-                  js.context.callMethod('flutterPanMap',
-                      [-event.delta.dx * 12.5, -event.delta.dy * 12.5]);
+                  js.context.callMethod('flutterPanMap', [
+                    -event.delta.dx * 12.5,
+                    -event.delta.dy * 12.5,
+                  ]);
                 } catch (_) {}
               },
               onPointerSignal: (event) {
                 if (event is PointerScrollEvent) {
                   try {
-                    js.context.callMethod(
-                        'flutterZoomBy', [event.scrollDelta.dy]);
+                    js.context.callMethod('flutterZoomBy', [
+                      event.scrollDelta.dy,
+                    ]);
                   } catch (_) {}
                 }
               },
@@ -230,7 +261,9 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                       Text(
                         '지도 불러오는 중...',
                         style: TextStyle(
-                            fontSize: 13, color: AppColors.textSecondary),
+                          fontSize: 13,
+                          color: AppColors.textSecondary,
+                        ),
                       ),
                     ],
                   ),
@@ -260,20 +293,28 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                           border: Border.all(color: AppColors.border),
                           boxShadow: [
                             BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.08),
-                                blurRadius: 8,
-                                offset: const Offset(0, 2)),
+                              color: Colors.black.withValues(alpha: 0.08),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
                           ],
                         ),
                         child: const Row(
                           children: [
                             SizedBox(width: 14),
-                            Icon(Icons.search,
-                                size: 18, color: AppColors.textHint),
+                            Icon(
+                              Icons.search,
+                              size: 18,
+                              color: AppColors.textHint,
+                            ),
                             SizedBox(width: 6),
-                            Text('장소 검색...',
-                                style: TextStyle(
-                                    color: AppColors.textHint, fontSize: 13)),
+                            Text(
+                              '장소 검색...',
+                              style: TextStyle(
+                                color: AppColors.textHint,
+                                fontSize: 13,
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -303,7 +344,8 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                       child: GestureDetector(
                         onTap: _closeFab,
                         child: Container(
-                            color: Colors.black.withValues(alpha: 0.3)),
+                          color: Colors.black.withValues(alpha: 0.3),
+                        ),
                       ),
                     ),
                     Positioned(
@@ -338,8 +380,8 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                       _locationLoading
                           ? Icons.hourglass_top
                           : (_currentPosition != null
-                              ? Icons.my_location
-                              : Icons.location_searching),
+                                ? Icons.my_location
+                                : Icons.location_searching),
                       size: 40,
                       iconColor: _currentPosition != null
                           ? AppColors.primary
@@ -352,8 +394,7 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                     right: 20,
                     bottom: buttonBottom,
                     child: GestureDetector(
-                      onTap: () =>
-                          setState(() => _fabExpanded = !_fabExpanded),
+                      onTap: () => setState(() => _fabExpanded = !_fabExpanded),
                       child: Container(
                         width: 42,
                         height: 42,
@@ -362,9 +403,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                           borderRadius: BorderRadius.circular(21),
                           boxShadow: [
                             BoxShadow(
-                                color: AppColors.primary.withValues(alpha: 0.4),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4)),
+                              color: AppColors.primary.withValues(alpha: 0.4),
+                              blurRadius: 12,
+                              offset: const Offset(0, 4),
+                            ),
                           ],
                         ),
                         child: Icon(
@@ -392,13 +434,13 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
               return Container(
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  borderRadius:
-                      BorderRadius.vertical(top: Radius.circular(24)),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
                   boxShadow: [
                     BoxShadow(
-                        color: Colors.black12,
-                        blurRadius: 12,
-                        offset: Offset(0, -4))
+                      color: Colors.black12,
+                      blurRadius: 12,
+                      offset: Offset(0, -4),
+                    ),
                   ],
                 ),
                 child: CustomScrollView(
@@ -421,20 +463,25 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                           ),
                           const SizedBox(height: 14),
                           Padding(
-                            padding:
-                                const EdgeInsets.symmetric(horizontal: 20),
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
                             child: Row(
                               children: [
-                                const Text('참여 중인 방',
-                                    style: TextStyle(
-                                        fontSize: 15,
-                                        fontWeight: FontWeight.w700,
-                                        color: AppColors.textDark)),
+                                const Text(
+                                  '참여 중인 방',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.textDark,
+                                  ),
+                                ),
                                 const Spacer(),
-                                Text('${rooms.length}개',
-                                    style: const TextStyle(
-                                        fontSize: 13,
-                                        color: AppColors.textSecondary)),
+                                Text(
+                                  '${rooms.length}개',
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -456,22 +503,31 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                                   color: AppColors.primaryLight,
                                   borderRadius: BorderRadius.circular(28),
                                 ),
-                                child: const Icon(Icons.group_add,
-                                    color: AppColors.primary, size: 28),
+                                child: const Icon(
+                                  Icons.group_add,
+                                  color: AppColors.primary,
+                                  size: 28,
+                                ),
                               ),
                               const SizedBox(height: 12),
-                              const Text('참여 중인 방이 없습니다',
-                                  style: TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.textSecondary)),
+                              const Text(
+                                '참여 중인 방이 없습니다',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
                               const SizedBox(height: 6),
                               GestureDetector(
                                 onTap: () => context.push('/room/create'),
-                                child: const Text('방 만들기',
-                                    style: TextStyle(
-                                        fontSize: 14,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primary)),
+                                child: const Text(
+                                  '방 만들기',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
                               ),
                             ],
                           ),
@@ -519,40 +575,55 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                 color: AppColors.primaryLight,
                 borderRadius: BorderRadius.circular(21),
               ),
-              child:
-                  const Icon(Icons.people, color: AppColors.primary, size: 20),
+              child: const Icon(
+                Icons.people,
+                color: AppColors.primary,
+                size: 20,
+              ),
             ),
             const SizedBox(width: 12),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(room.name,
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textDark),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis),
+                  Text(
+                    room.name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textDark,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   const SizedBox(height: 2),
-                  Text('${room.memberCount}명 참여 중',
-                      style: const TextStyle(
-                          fontSize: 13, color: AppColors.textSecondary)),
+                  Text(
+                    '${room.memberCount}명 참여 중',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right,
-                size: 20, color: AppColors.textHint),
+            const Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: AppColors.textHint,
+            ),
           ],
         ),
       ),
     );
   }
 
-  Widget _circleButton(IconData icon,
-      {VoidCallback? onTap,
-      double size = 40,
-      Color iconColor = AppColors.textPrimary}) {
+  Widget _circleButton(
+    IconData icon, {
+    VoidCallback? onTap,
+    double size = 40,
+    Color iconColor = AppColors.textPrimary,
+  }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -563,9 +634,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           borderRadius: BorderRadius.circular(size / 2),
           boxShadow: [
             BoxShadow(
-                color: Colors.black.withValues(alpha: 0.12),
-                blurRadius: 8,
-                offset: const Offset(0, 2)),
+              color: Colors.black.withValues(alpha: 0.12),
+              blurRadius: 8,
+              offset: const Offset(0, 2),
+            ),
           ],
         ),
         child: Icon(icon, size: 22, color: iconColor),
@@ -583,9 +655,10 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           borderRadius: BorderRadius.circular(50),
           boxShadow: [
             BoxShadow(
-                color: Colors.black.withValues(alpha: 0.15),
-                blurRadius: 6,
-                offset: const Offset(0, 2)),
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
           ],
         ),
         child: Row(
@@ -593,11 +666,14 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           children: [
             Icon(icon, size: 16, color: AppColors.primary),
             const SizedBox(width: 6),
-            Text(label,
-                style: const TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: AppColors.textDark)),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: AppColors.textDark,
+              ),
+            ),
           ],
         ),
       ),
