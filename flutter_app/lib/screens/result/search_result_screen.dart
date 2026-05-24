@@ -1,4 +1,5 @@
 // ignore: avoid_web_libraries_in_flutter
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:js' as js;
@@ -13,6 +14,7 @@ import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/common/app_header.dart';
+import 'package:flutter/services.dart';
 
 class SearchResultScreen extends ConsumerStatefulWidget {
   final String roomId;
@@ -32,6 +34,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   final _mapKey = GlobalKey();
   List<Map<String, dynamic>> _memberPositions = [];
   String _midAddress = '중간 지점';
+  double _midLat = 0;
+  double _midLng = 0;
   Map<String, int> _memberMinutes = {};
   Offset? _lastFocalPoint;
 
@@ -73,6 +77,9 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         _api.startSearch(widget.roomId, 'reset');
       }
     }
+    try {
+      js.context.callMethod('flutterDestroyKakaoMap', []);
+    } catch (_) {}
     try {
       js.context.callMethod('flutterDestroyKakaoMap', []);
     } catch (_) {}
@@ -210,6 +217,152 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     } catch (_) {}
   }
 
+  void _showRouteOptions(BuildContext context, String memberName) {
+    final member = _memberPositions.firstWhere(
+      (m) => m['name'] == memberName,
+      orElse: () => {},
+    );
+    if (member.isEmpty) return;
+
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    final room = rooms.firstWhere(
+      (r) => r.id == widget.roomId,
+      orElse: () => rooms.first,
+    );
+    final departure = room.members
+        .firstWhere(
+          (m) => m.name == memberName,
+          orElse: () => room.members.first,
+        )
+        .departure;
+    final kakaoUrl =
+        'https://map.kakao.com/link/from/$departure,${member['lat']},${member['lng']}/to/$_midAddress,$_midLat,$_midLng';
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => GestureDetector(
+        onTap: () => Navigator.pop(context),
+        child: Container(
+          color: Colors.transparent,
+          child: GestureDetector(
+            onTap: () {},
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const SizedBox(height: 8),
+                  Container(
+                    width: 36,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.border,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Text(
+                      '$memberName님 맞춤 길찾기',
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                  ),
+                  const Divider(height: 1, color: AppColors.border),
+                  ListTile(
+                    leading: const Icon(Icons.map, color: AppColors.primary),
+                    title: const Text(
+                      '카카오맵으로 길찾기',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      final url = Uri.parse(kakaoUrl);
+                      if (await canLaunchUrl(url)) {
+                        await launchUrl(
+                          url,
+                          mode: LaunchMode.externalApplication,
+                        );
+                      }
+                    },
+                  ),
+                  const Divider(height: 1, color: AppColors.border),
+                  ListTile(
+                    leading: const Icon(Icons.copy, color: AppColors.primary),
+                    title: const Text(
+                      '링크 복사',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      await Clipboard.setData(ClipboardData(text: kakaoUrl));
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('링크가 복사됐어요!')),
+                        );
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openKakaoMap(String memberName) async {
+    final member = _memberPositions.firstWhere(
+      (m) => m['name'] == memberName,
+      orElse: () => {},
+    );
+    if (member.isEmpty) return;
+
+    final srcLat = member['lat'];
+    final srcLng = member['lng'];
+    final dstLat = _midLat;
+    final dstLng = _midLng;
+
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    final room = rooms.firstWhere(
+      (r) => r.id == widget.roomId,
+      orElse: () => rooms.first,
+    );
+    final departure = room.members
+        .firstWhere(
+          (m) => m.name == memberName,
+          orElse: () => room.members.first,
+        )
+        .departure;
+
+    final url = Uri.parse(
+      'https://map.kakao.com/link/from/$departure,$srcLat,$srcLng/to/$_midAddress,$dstLat,$dstLng',
+    );
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    }
+  }
+
   Future<void> _loadMemberMarkers() async {
     final criteria = ref.read(searchCriteriaProvider);
     try {
@@ -228,6 +381,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
       final midLat = (midpoint['lat'] as num).toDouble();
       final midLng = (midpoint['lng'] as num).toDouble();
+      _midLat = midLat;
+      _midLng = midLng;
 
       final List<Map<String, dynamic>> positions = [];
       final Map<String, int> minutesMap = {};
@@ -288,6 +443,11 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         setState(() {
           _memberPositions = positions;
           _midAddress = midAddress;
+          _midAddress = midAddress;
+          double _midLat = 0;
+          double _midLng = 0;
+          _midLat = midLat;
+          _midLng = midLng;
           _memberMinutes = minutesMap;
         });
       }
@@ -382,7 +542,24 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: const AppHeader(title: '탐색 결과'),
+      appBar: AppHeader(
+        title: '탐색 결과',
+        onBack: () {
+          try {
+            js.context.callMethod('flutterDestroyKakaoMap', []);
+            js.context['_kakaoMapReady'] = false;
+            js.context['_kakaoMapCancelled'] = false;
+            // 메인 화면 지도 재생성
+            Future.delayed(const Duration(milliseconds: 300), () {
+              js.context.callMethod('flutterCreateKakaoMapInBody', [
+                37.4508,
+                126.6573,
+              ]);
+            });
+          } catch (_) {}
+          context.pop();
+        },
+      ),
       body: Column(
         children: [
           // ── 지도 영역 280px ──
@@ -489,12 +666,50 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                               ),
                             ),
                             const Spacer(),
-                            Text(
-                              '${_memberMinutes[m.name] ?? m.travelMinutes ?? '-'}분',
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
-                              ),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(
+                                      '${_memberMinutes[m.name] ?? m.travelMinutes ?? '-'}분',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const SizedBox(width: 4),
+                                    GestureDetector(
+                                      onTap: () =>
+                                          _showRouteOptions(context, m.name),
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.primary,
+                                          borderRadius: BorderRadius.circular(
+                                            8,
+                                          ),
+                                        ),
+                                        child: const Text(
+                                          '길찾기',
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                            color: Colors.white,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(width: 8),
+                              ],
                             ),
                           ],
                         ),
@@ -510,53 +725,24 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
           Container(
             color: Colors.white,
             padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-            child: Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () =>
-                        context.push('/room/${widget.roomId}/recommend'),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: AppColors.border),
-                      foregroundColor: AppColors.textDark,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text(
-                      '추천 장소',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+            child: SizedBox(
+              width: double.infinity,
+              child: OutlinedButton(
+                onPressed: () =>
+                    context.push('/room/${widget.roomId}/recommend'),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: AppColors.border),
+                  foregroundColor: AppColors.textDark,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
                   ),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () =>
-                        context.push('/room/${widget.roomId}/share'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      elevation: 0,
-                    ),
-                    child: const Text(
-                      '결과 공유',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
+                child: const Text(
+                  '추천 장소',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
                 ),
-              ],
+              ),
             ),
           ),
         ],

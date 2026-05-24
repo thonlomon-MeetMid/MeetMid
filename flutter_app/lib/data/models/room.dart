@@ -7,6 +7,7 @@ class Room {
   final int memberCount;
   final List<Member> members;
   final String hostId;
+  final String prompt; // 탐색 프롬프트
 
   const Room({
     required this.id,
@@ -15,6 +16,7 @@ class Room {
     required this.memberCount,
     required this.members,
     this.hostId = '',
+    this.prompt = '',
   });
 
   Room copyWith({
@@ -24,6 +26,7 @@ class Room {
     int? memberCount,
     List<Member>? members,
     String? hostId,
+    String? prompt,
   }) {
     return Room(
       id: id ?? this.id,
@@ -32,6 +35,7 @@ class Room {
       memberCount: memberCount ?? this.memberCount,
       members: members ?? this.members,
       hostId: hostId ?? this.hostId,
+      prompt: prompt ?? this.prompt,
     );
   }
 
@@ -45,6 +49,7 @@ class Room {
           .map((e) => Member.fromJson(e as Map<String, dynamic>))
           .toList(),
       hostId: (json['hostId'] as String?) ?? '',
+      prompt: (json['prompt'] as String?) ?? '',
     );
   }
 
@@ -55,5 +60,6 @@ class Room {
         'memberCount': memberCount,
         'members': members.map((e) => e.toJson()).toList(),
         'hostId': hostId,
+        'prompt': prompt,
       };
 }

@@ -6,3 +6,6 @@ final searchCriteriaProvider = StateProvider<SearchCriteria>(
 );
 
 final selectedPlaceIdProvider = StateProvider<String?>((ref) => null);
+
+// 탐색 프롬프트 (어디 가세요? 입력값)
+final searchPromptProvider = StateProvider<String>((ref) => '');

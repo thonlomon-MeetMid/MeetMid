@@ -9,6 +9,7 @@ import hashlib
 import httpx
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -601,6 +602,81 @@ async def _travel_minutes(client: httpx.AsyncClient, src_lat, src_lng, dst_lat, 
     return max(1, round((distance_km / speed_kmh) * 60))
 
 
+# Gemini 결과 캐시 (prompt → {category, keyword}) — 같은 프롬프트면 재호출 없음
+_GEMINI_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "gemini_cache.json")
+_gemini_prompt_cache: dict = {}
+_MAX_GEMINI_CACHE = 200
+
+# 상황 키워드 → 장소 키워드 룰 매핑 (Gemini 호출 전 빠른 경로)
+_SITUATION_MAP = {
+    "소개팅": "분위기카페",
+    "데이트": "루프탑카페",
+    "회식": "고깃집",
+    "아이랑": "키즈카페",
+    "아이와": "키즈카페",
+    "어린이": "키즈카페",
+    "가족": "패밀리레스토랑",
+    "공부": "북카페",
+    "독서": "북카페",
+    "스터디": "스터디카페",
+    "혼술": "이자카야",
+    "혼밥": "음식점",
+    "해장": "해장국",
+}
+
+# 검색 키워드 → 카카오 카테고리 코드 (더 정확한 카테고리 검색용)
+_KW_TO_CODE = {"음식점": "FD6", "카페": "CE7", "편의점": "CS2", "맛집": "FD6"}
+
+# Gemini 호출 없이 바로 카카오 검색 가능한 단순 키워드 (Gemini 타임아웃 방지)
+_DIRECT_KEYWORDS = {
+    "카페", "음식점", "맛집", "편의점", "술집", "이자카야", "호프", "포차",
+    "노래방", "볼링장", "볼링", "방탈출카페", "방탈출", "영화관",
+    "미술관", "박물관", "공원", "마트", "쇼핑몰",
+    "북카페", "스터디카페", "키즈카페", "감성카페", "한옥카페", "루프탑카페",
+    "피자", "치킨", "햄버거", "마라탕", "초밥", "삼겹살", "국밥",
+    "해장국", "고깃집", "패밀리레스토랑", "이탈리안레스토랑",
+    "스파", "찜질방", "마사지",
+    "맥도날드", "롯데리아", "버거킹", "스타벅스", "이디야", "메가커피",
+    "GS25", "CU", "세븐일레븐",
+}
+
+# 이 fallback 키워드들은 특정 음식명 검색 실패를 감추므로 목적지 탐색에서 제외
+_BROAD_FOOD_FALLBACKS = {"음식점", "한식", "일식", "중식", "횟집"}
+
+# 명시적 음식/장소 키워드 — 이게 있으면 상황 룰을 건너뛰고 Gemini로 넘김
+_EXPLICIT_KEYWORDS = {
+    "피자", "치킨", "햄버거", "버거", "초밥", "스시", "마라탕", "라멘", "라면",
+    "파스타", "스테이크", "삼겹살", "갈비", "불고기", "냉면", "국밥", "떡볶이",
+    "족발", "보쌈", "곱창", "막창", "닭갈비", "순대", "해장국", "설렁탕",
+    "짜장면", "짬뽕", "탕수육", "양꼬치", "딤섬", "훠궈", "샤브샤브",
+    "카페", "커피", "디저트", "케이크", "베이커리", "와플",
+    "맥도날드", "롯데리아", "버거킹", "스타벅스", "이디야", "메가커피",
+    "술집", "이자카야", "호프", "맥주", "와인", "소주", "포차", "바",
+    "노래방", "볼링", "영화", "방탈출", "스크린골프", "클라이밍",
+    "편의점", "마트", "쇼핑",
+}
+
+
+def _load_gemini_cache() -> None:
+    try:
+        with open(_GEMINI_CACHE_PATH, encoding="utf-8") as f:
+            _gemini_prompt_cache.update(json.load(f))
+        print(f"[GeminiCache] {len(_gemini_prompt_cache)}개 항목 로드")
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[GeminiCache] 로드 오류: {e}")
+
+
+def _save_gemini_cache() -> None:
+    try:
+        os.makedirs(os.path.dirname(_GEMINI_CACHE_PATH), exist_ok=True)
+        with open(_GEMINI_CACHE_PATH, "w", encoding="utf-8") as f:
+            json.dump(_gemini_prompt_cache, f, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        print(f"[GeminiCache] 저장 오류: {e}")
+
+
 async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: float) -> dict | None:
     kakao_key = os.getenv("KAKAO_API_KEY")
     if not kakao_key:
@@ -629,7 +705,7 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
             return None
 
     # 1단계: 3개 카테고리 병렬 검색
-    targets = [("SW8", 1000), ("AT4", 800), ("SC4", 600)]
+    targets = [("SW8", 1000), ("AT4", 800)]
     results = await asyncio.gather(*[_fetch_category(code, radius) for code, radius in targets])
     result = next((r for r in results if r), None)
     if result:
@@ -648,6 +724,360 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
         return result
 
     print("[Landmark] 5000m 내 랜드마크 없음")
+    return None
+
+
+async def _get_google_place_rating(client: httpx.AsyncClient, name: str, lat: float, lng: float) -> tuple[float, int]:
+    """Google Places API로 장소 평점/리뷰 수 조회. 실패 시 (0.0, 0) 반환."""
+    api_key = os.getenv("PLACE_API_KEY")
+    if not api_key or not name:
+        return 0.0, 0
+    try:
+        resp = await client.get(
+            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+            params={
+                "input": name,
+                "inputtype": "textquery",
+                "fields": "rating,user_ratings_total",
+                "locationbias": f"point:{lat},{lng}",
+                "key": api_key,
+            },
+            timeout=3.0,
+        )
+        data = resp.json()
+        candidates = data.get("candidates", [])
+        if candidates:
+            rating = float(candidates[0].get("rating", 0.0) or 0.0)
+            count = int(candidates[0].get("user_ratings_total", 0) or 0)
+            return round(rating, 1), count
+        return 0.0, 0
+    except Exception:
+        return 0.0, 0
+
+
+_GEMINI_PARTICLES = ['입니다', '이에요', '예요', '이다', '으로', '로', '에서', '를', '을', '이가', '가', '이', '은', '는', '도', '만']
+
+def _strip_gemini_output(raw: str) -> str:
+    """Gemini 응답에서 순수 키워드만 추출 (불필요한 문장/어미/문장부호 제거)."""
+    first_line = raw.strip().split('\n')[0].strip()
+    tokens = first_line.split()
+    first_token = tokens[0] if tokens else first_line
+    cleaned = re.sub(r'[^가-힣a-zA-Z0-9]', '', first_token)
+    for particle in sorted(_GEMINI_PARTICLES, key=len, reverse=True):
+        if cleaned.endswith(particle) and len(cleaned) > len(particle) + 1:
+            cleaned = cleaned[:-len(particle)]
+            break
+    return cleaned
+
+
+def _best_doc(docs: list, keyword: str) -> dict | None:
+    """여러 카카오 검색 결과 중 키워드와 가장 일치하는 장소 반환.
+    관련 없는 결과만 있으면 None 반환."""
+    if not docs:
+        return None
+
+    def score(doc):
+        name = doc.get("place_name", "")
+        cat = doc.get("category_name", "")
+        s = 0
+        if keyword in name:
+            s += 3
+        if keyword in cat:
+            s += 2
+        for i in range(len(keyword) - 1):
+            sub = keyword[i:i + 2]
+            if sub in name:
+                s += 1
+            if sub in cat:
+                s += 1
+        return s
+
+    scored = [(score(doc), doc) for doc in docs]
+    best_score, best_doc = max(scored, key=lambda x: x[0])
+
+    if best_score == 0:
+        print(f"[Gemini] '{keyword}' 관련 결과 없음 (최고점 0) → fallback 시도")
+        return None
+
+    return best_doc
+
+
+def _get_fallback_keyword(keyword: str) -> str | None:
+    """구체적 키워드 검색 실패 시 사용할 일반 키워드 반환."""
+    rules = [
+        # 카페/디저트
+        (["카페", "커피", "브런치", "디저트", "케이크", "베이커리", "버블티", "흑당", "마카롱", "와플", "크로플", "티룸", "茶"], "카페"),
+
+        # 음식 — 한식
+        (["한식", "국밥", "설렁탕", "곰탕", "삼겹살", "고깃집", "갈비", "불고기", "냉면", "비빔밥", "쌈밥",
+          "순대", "떡볶이", "분식", "김밥", "해장국", "백반", "보쌈", "족발", "닭갈비", "곱창", "막창"], "한식"),
+
+        # 음식 — 일식
+        (["일식", "초밥", "스시", "사시미", "회", "해산물", "라멘", "라면", "우동", "소바", "돈가스",
+          "이자카야", "오마카세", "덮밥", "돈부리", "샤브샤브", "훠궈"], "일식"),
+
+        # 음식 — 중식
+        (["중식", "중국집", "짜장면", "짬뽕", "탕수육", "마라탕", "마라", "딤섬", "양꼬치"], "중식"),
+
+        # 음식 — 양식/패스트푸드
+        (["양식", "피자", "파스타", "스테이크", "햄버거", "버거", "샌드위치", "타코", "멕시코", "브리또",
+          "치킨", "레스토랑", "그릴", "바비큐", "BBQ"], "음식점"),
+
+        # 음식 — 해산물
+        (["해산물", "조개구이", "게요리", "랍스터", "새우", "굴", "횟집"], "횟집"),
+
+        # 술집/바
+        (["술집", "이자카야", "포차", "호프", "맥주", "생맥주", "와인바", "루프탑바", "칵테일바", "펍", "바"], "술집"),
+
+        # 카페 — 특수
+        (["키즈카페", "어린이"], "키즈카페"),
+        (["북카페", "만화카페", "독서"], "북카페"),
+        (["PC방", "게임카페", "게임"], "PC방"),
+
+        # 엔터테인먼트
+        (["노래방", "코인노래", "노래"], "노래방"),
+        (["볼링", "포켓볼", "당구", "탁구"], "볼링장"),
+        (["영화", "시네마", "CGV", "롯데시네마", "메가박스"], "영화관"),
+        (["방탈출", "탈출", "미션"], "방탈출카페"),
+        (["VR", "가상현실", "아케이드"], "VR체험"),
+        (["스크린골프", "골프"], "스크린골프"),
+        (["클라이밍", "암벽"], "클라이밍센터"),
+
+        # 문화/예술
+        (["미술관", "갤러리", "전시"], "미술관"),
+        (["박물관", "역사", "기념관"], "박물관"),
+        (["공연", "뮤지컬", "연극", "콘서트"], "공연장"),
+        (["서점", "책방", "도서관"], "서점"),
+
+        # 쇼핑
+        (["쇼핑", "백화점", "마트", "편집샵", "옷", "의류", "빈티지", "시장"], "쇼핑몰"),
+
+        # 자연/야외
+        (["공원", "산책", "광장", "한강", "강변"], "공원"),
+        (["바다", "해변", "해수욕장"], "해수욕장"),
+
+        # 휴식/뷰티
+        (["스파", "찜질방", "사우나", "목욕"], "찜질방"),
+        (["마사지", "힐링", "안마"], "마사지"),
+        (["네일", "미용", "헤어", "살롱"], "네일샵"),
+
+        # 스포츠/헬스
+        (["헬스", "피트니스", "운동", "수영", "요가", "필라테스"], "헬스장"),
+    ]
+    for keywords, fallback in rules:
+        if any(k in keyword for k in keywords):
+            return fallback if fallback != keyword else None
+    return None
+
+
+async def _find_place_by_prompt(
+    client: httpx.AsyncClient,
+    lat: float,
+    lng: float,
+    prompt: str,
+) -> dict | None:
+    """Gemini가 프롬프트 전체를 분석해 장소명 추천 → 카카오 키워드 검색으로 좌표 반환."""
+    kakao_key = os.getenv("KAKAO_API_KEY")
+    if not kakao_key:
+        return None
+
+    # 캐시 확인
+    cache_key = prompt.strip().lower()
+    place_name = None
+    from_cache = False
+
+    if cache_key in _gemini_prompt_cache:
+        place_name = _gemini_prompt_cache[cache_key].get("place_name")
+        from_cache = True
+        print(f"[Gemini] 캐시 사용: prompt='{prompt}' → place_name='{place_name}'")
+    else:
+        # 방법 2: 상황 키워드 룰 매핑 — 명시적 음식/장소 키워드가 없을 때만 적용
+        has_explicit = any(kw in cache_key for kw in _EXPLICIT_KEYWORDS)
+        if not has_explicit:
+            for situation, mapped_kw in _SITUATION_MAP.items():
+                if situation in cache_key:
+                    place_name = mapped_kw
+                    print(f"[Situation] '{situation}' 감지 → place_name='{place_name}'")
+                    break
+
+        # 방법 2b: 프롬프트 자체가 이미 알려진 카카오 검색 키워드 → Gemini 불필요
+        if not place_name and cache_key in _DIRECT_KEYWORDS:
+            place_name = cache_key
+            print(f"[Direct] '{cache_key}' → 직접 사용 (Gemini 건너뜀)")
+
+        if not place_name:
+            # 방법 3: Gemini에게 프롬프트 전체를 주고 장소 유형명만 반환받기
+            gemini_key = os.getenv("GEMINI_API_KEY")
+            if not gemini_key:
+                print("[Gemini] GEMINI_API_KEY 없음 → 프롬프트 검색 불가")
+                return None
+            gemini_payload = {
+                "system_instruction": {"parts": [{"text": (
+                    "당신은 카카오맵 장소 검색 전문가입니다. "
+                    "사용자의 요청을 분석해서 카카오맵 키워드 검색에 적합한 장소 유형을 한국어로 딱 하나만 출력하세요. "
+                    "출력 규칙: "
+                    "1. 반드시 카카오맵에서 검색 가능한 2~5글자 키워드로 출력하세요. "
+                    "2. 설명, 이유, 문장 형태는 절대 출력하지 마세요. 키워드만 출력하세요. "
+                    "3. 분위기/감성이 중요한 경우 '감성카페', '루프탑카페', '한옥카페' 처럼 구체적으로 출력하세요. "
+                    "4. '식당', '밥', '음식', '먹을 것', '밥집' 같은 일반 표현은 반드시 '음식점'으로 출력하세요. "
+                    "5. '카페', '커피' 같은 단어는 반드시 '카페'로 출력하세요. "
+                    "6. 맥도날드, 롯데리아, 버거킹, 스타벅스, 이디야, 투썸플레이스, 메가커피, 빽다방, GS25, CU, 세븐일레븐 같은 "
+                    "특정 브랜드명이 포함된 경우 브랜드명을 그대로 출력하세요. "
+                    "예시: "
+                    "'소개팅하려고 하는데 분위기 좋은 카페' → '감성카페', "
+                    "'분위기 있는 카페 어때' → '감성카페', "
+                    "'둘이서 조용히 얘기하고 싶어' → '북카페', "
+                    "'친구들이랑 술 한잔 하고 싶어' → '이자카야', "
+                    "'가볍게 한잔 하기 좋은 곳' → '호프', "
+                    "'분위기 있는 술자리 하고 싶어' → '와인바', "
+                    "'조용히 공부하거나 쉬고 싶어' → '북카페', "
+                    "'가족끼리 외식하고 싶어' → '패밀리레스토랑', "
+                    "'분위기 있는 저녁 식사 하고 싶어' → '이탈리안레스토랑', "
+                    "'데이트하기 좋은 곳' → '루프탑카페', "
+                    "'뭔가 특별한 걸 하고 싶어' → '방탈출카페', "
+                    "'친구들이랑 왁자지껄하게 놀고 싶어' → '노래방', "
+                    "'아이랑 갈 수 있는 곳' → '키즈카페', "
+                    "'해장하고 싶어' → '해장국', "
+                    "'맛있는 거 먹고 싶어' → '맛집', "
+                    "'야외에서 시간 보내고 싶어' → '공원', "
+                    "'피자 먹고 싶어' → '피자', "
+                    "'마라탕 먹으러 가자' → '마라탕', "
+                    "'노래방 가고 싶어' → '노래방', "
+                    "'방탈출 하고 싶어' → '방탈출카페', "
+                    "'전시 보고 싶어' → '미술관', "
+                    "'스파 가고 싶어' → '스파', "
+                    "'쇼핑하고 싶어' → '쇼핑몰', "
+                    "'산책하고 싶어' → '공원', "
+                    "'식당 가고 싶어' → '음식점', "
+                    "'밥 먹자' → '음식점', "
+                    "'카페 가자' → '카페', "
+                    "'커피 마시고 싶어' → '카페', "
+                    "'맥도날드 가고 싶어' → '맥도날드', "
+                    "'롯데리아 먹고 싶어' → '롯데리아', "
+                    "'스타벅스 갈래' → '스타벅스', "
+                    "'버거킹 가자' → '버거킹'. "
+                    "키워드 외에 다른 말은 절대 출력하지 마세요."
+                )}]},
+                "contents": [{"parts": [{"text": f"요청: {prompt}"}]}],
+                "generationConfig": {"maxOutputTokens": 30, "temperature": 0.1},
+            }
+            gemini_url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash-lite:generateContent?key={gemini_key}"
+            )
+            for attempt in range(2):
+                try:
+                    gemini_resp = await client.post(gemini_url, json=gemini_payload, timeout=15.0)
+                    gemini_resp.raise_for_status()
+                    candidates = gemini_resp.json().get("candidates", [])
+                    raw = candidates[0]["content"]["parts"][0]["text"] if candidates else ""
+                    place_name = _strip_gemini_output(raw) if raw else ""
+                    if place_name:
+                        break
+                except Exception as e:
+                    print(f"[Gemini] 분석 실패 (attempt {attempt + 1}): {e}")
+                    if attempt == 1:
+                        # Gemini 완전 실패 → 프롬프트에서 알려진 키워드 직접 추출
+                        for kw in sorted(_DIRECT_KEYWORDS, key=len, reverse=True):
+                            if kw in cache_key:
+                                place_name = kw
+                                print(f"[Gemini] 실패, 프롬프트 키워드 추출: '{kw}'")
+                                break
+                        if not place_name:
+                            return None
+                    print("[Gemini] 재시도 중...")
+
+        if not place_name:
+            return None
+
+        print(f"[Search] 키워드 결정: prompt='{prompt}' → place_name='{place_name}'")
+
+    if not place_name:
+        return None
+
+    # 카카오 키워드 검색: 구체 키워드 → 비음식 fallback 키워드 순으로 시도
+    search_keywords = [place_name]
+    fallback_kw = _get_fallback_keyword(place_name)
+    if fallback_kw and fallback_kw not in _BROAD_FOOD_FALLBACKS:
+        search_keywords.append(fallback_kw)
+    # 카테고리별 추가 제외 필터
+    _code_excludes = {
+        "FD6": ["카페", "커피", "베이커리", "제과", "디저트"],
+    }
+
+    excluded = {"산", "봉", "계곡", "폭포", "등산"}
+    for search_kw in search_keywords:
+        category_code = _KW_TO_CODE.get(search_kw)
+        extra_excluded = _code_excludes.get(category_code, [])
+        for radius in [1000, 3000, 5000]:
+            try:
+                if category_code:
+                    kakao_resp = await client.get(
+                        "https://dapi.kakao.com/v2/local/search/category.json",
+                        params={
+                            "category_group_code": category_code,
+                            "x": lng, "y": lat,
+                            "radius": radius,
+                            "sort": "distance",
+                            "size": 5,
+                        },
+                        headers={"Authorization": f"KakaoAK {kakao_key}"},
+                        timeout=5.0,
+                    )
+                else:
+                    kakao_resp = await client.get(
+                        "https://dapi.kakao.com/v2/local/search/keyword.json",
+                        params={
+                            "query": search_kw,
+                            "x": lng, "y": lat,
+                            "radius": radius,
+                            "sort": "distance",
+                            "size": 5,
+                        },
+                        headers={"Authorization": f"KakaoAK {kakao_key}"},
+                        timeout=5.0,
+                    )
+                kakao_resp.raise_for_status()
+                docs = kakao_resp.json().get("documents", [])
+                valid_docs = [
+                    d for d in docs
+                    if not any(ex in d.get("category_name", "") for ex in excluded | set(extra_excluded))
+                ]
+                if valid_docs:
+                    # 평점 병렬 조회 → 평점 있는 것 중 최고점 선택
+                    ratings = await asyncio.gather(*[
+                        _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in valid_docs
+                    ])
+                    rated_pairs = [(d, r) for d, r in zip(valid_docs, ratings) if r[0] > 0]
+                    if rated_pairs:
+                        doc = max(rated_pairs, key=lambda x: x[1][0])[0]
+                    else:
+                        doc = _best_doc(valid_docs, search_kw)
+                        if doc is None:
+                            if category_code:
+                                doc = valid_docs[0]
+                            else:
+                                continue
+                    result = {
+                        "name": doc["place_name"],
+                        "lat": float(doc["y"]),
+                        "lng": float(doc["x"]),
+                        "category": "",
+                        "keyword": search_kw,
+                    }
+                    # 카카오 검색 성공 시에만 캐시 저장 (최대 200개 초과 시 오래된 항목 제거)
+                    if not from_cache:
+                        _gemini_prompt_cache[cache_key] = {"place_name": place_name}
+                        if len(_gemini_prompt_cache) > _MAX_GEMINI_CACHE:
+                            oldest = list(_gemini_prompt_cache.keys())[0]
+                            del _gemini_prompt_cache[oldest]
+                        _save_gemini_cache()
+                    print(f"[Gemini] 최종 장소: {result['name']} (키워드: '{search_kw}', radius: {radius}m)")
+                    return result
+            except Exception as e:
+                print(f"[Gemini] 카카오 검색 실패(keyword='{search_kw}', radius={radius}): {e}")
+
+    print(f"[Gemini] '{place_name}' 및 fallback 검색 결과 없음")
     return None
 
 
@@ -928,12 +1358,16 @@ class UpdateLocationRequest(BaseModel):
     lng: float | None = None
     shared: bool = True
 
+class UpdateRoomPromptRequest(BaseModel):
+    prompt: str = ""
+
 
 # ── FastAPI 앱 ────────────────────────────────────────────────────
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_subway_file_cache()
+    _load_gemini_cache()
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         app.state.client = client
         yield
@@ -1511,7 +1945,8 @@ async def leave_room(room_id: str, request: Request, data: LeaveRoomRequest):
 @app.get("/midpoint/{room_id}")
 async def get_midpoint(room_id: str, request: Request,
                        criteria: str = Query("distanceFair"),
-                       polyline: bool = Query(False)):
+                       polyline: bool = Query(False),
+                       prompt: str = Query("")):
     client = _client(request)
     try:
         if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
@@ -1555,6 +1990,20 @@ async def get_midpoint(room_id: str, request: Request,
             time_map = {}  # 랜드마크 좌표 기준으로 재계산
         else:
             mid_address = None
+
+        # 프롬프트가 있으면 Gemini로 근처 장소 탐색 → 최종 목적지 대체
+        prompt = prompt.strip()
+        gemini_keyword = ""
+        if prompt:
+            print(f"[Midpoint] Gemini 검색 전 좌표: lat={mid_lat}, lng={mid_lng}")
+            place = await _find_place_by_prompt(client, mid_lat, mid_lng, prompt)
+            if place:
+                mid_lat = place["lat"]
+                mid_lng = place["lng"]
+                mid_address = place["name"]
+                gemini_keyword = place.get("keyword", "")
+                time_map = {}  # 새 좌표 기준으로 이동시간 재계산
+                print(f"[Midpoint] Gemini 장소 적용 후 좌표: lat={mid_lat}, lng={mid_lng}, name={mid_address}")
 
         # 이동시간 병렬 계산 (timeFair이고 랜드마크 스냅 없으면 기존 값 재사용)
         if not time_map:
@@ -1600,6 +2049,7 @@ async def get_midpoint(room_id: str, request: Request,
             "midpoint": {"lat": mid_lat, "lng": mid_lng},
             "address": mid_address,
             "travel_times": travel_times,
+            "gemini_keyword": gemini_keyword,
         }
 
         if polyline:
@@ -1684,6 +2134,242 @@ async def get_locations(room_id: str, request: Request):
         ]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 방 프롬프트 저장 ──────────────────────────────────────────────
+
+@app.patch("/room/{room_id}/prompt")
+async def update_room_prompt(room_id: str, request: Request, data: UpdateRoomPromptRequest):
+    client = _client(request)
+    try:
+        if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
+            raise HTTPException(status_code=404, detail="존재하지 않는 방입니다.")
+        await sb_update(client, "rooms", {"prompt": data.prompt}, filters={"id": room_id})
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 경로 polyline 전용 ────────────────────────────────────────────
+
+@app.get("/midpoint/{room_id}/polylines")
+async def get_member_polylines(
+    room_id: str,
+    request: Request,
+    lat: float = Query(...),
+    lng: float = Query(...),
+):
+    """midpoint 재계산 없이 멤버별 경로 polyline만 반환 (백그라운드 로드용)."""
+    client = _client(request)
+    try:
+        members = await _get_members(client, room_id)
+        members_with_addr = [m for m in members if m["address"]]
+        coords_list = await asyncio.gather(*[
+            geocode_address(client, m["address"]) for m in members_with_addr
+        ])
+        located = [
+            {**m, "lat": c[0], "lng": c[1]}
+            for m, c in zip(members_with_addr, coords_list)
+            if c is not None
+        ]
+        if not located:
+            return {"polylines": []}
+        polylines = await asyncio.gather(*[
+            _member_polyline(client, m, lat, lng) for m in located
+        ])
+        return {"polylines": list(polylines)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── 장소 추천 ──────────────────────────────────────────────────────
+
+@app.get("/room/{room_id}/places")
+async def get_place_recommendations(
+    room_id: str,
+    request: Request,
+    prompt: str = Query(""),
+    category: str = Query(""),
+    lat: float = Query(0.0),
+    lng: float = Query(0.0),
+    radius: int = Query(1000),
+    min_radius: int = Query(0),
+    size: int = Query(5),
+):
+    """카카오 카테고리/키워드 검색으로 장소 목록 반환 (Gemini 호출 없음 — /midpoint에서 이미 처리)."""
+    client = _client(request)
+    kakao_key = os.getenv("KAKAO_API_KEY")
+
+    if not kakao_key:
+        raise HTTPException(status_code=500, detail="KAKAO_API_KEY가 없습니다.")
+
+    # 좌표가 없으면 방 멤버 중간지점 자동 계산
+    if lat == 0.0 and lng == 0.0:
+        try:
+            members = await _get_members(client, room_id)
+            members_with_addr = [m for m in members if m["address"]]
+            coords_list = await asyncio.gather(*[
+                geocode_address(client, m["address"]) for m in members_with_addr
+            ])
+            located = [{"lat": c[0], "lng": c[1]} for c in coords_list if c]
+            if located:
+                lat = sum(m["lat"] for m in located) / len(located)
+                lng = sum(m["lng"] for m in located) / len(located)
+        except Exception:
+            pass
+
+    valid_codes = {"CE7", "FD6", "CT1", "AT4", "SW8", "CS2", "MT1", "PM9", "HP8", "BK9"}
+    category_code = category if category in valid_codes else None
+    keyword = prompt.strip() or "카페"
+
+    # 카테고리별 제외 키워드
+    category_excludes = {
+        "FD6": ["카페", "커피", "베이커리", "제과", "디저트"],
+        "MT1": ["편의점"],
+    }
+    exclude_keywords = category_excludes.get(category_code or "", [])
+
+    # 결과 없으면 반경을 자동 확장
+    search_radii = sorted({radius, 3000, 5000}) if radius < 5000 else [radius]
+
+    places = []
+    try:
+        docs = []
+        for r in search_radii:
+            try:
+                if category_code:
+                    resp = await client.get(
+                        "https://dapi.kakao.com/v2/local/search/category.json",
+                        params={"category_group_code": category_code, "x": lng, "y": lat,
+                                "radius": r, "sort": "distance", "size": size},
+                        headers={"Authorization": f"KakaoAK {kakao_key}"},
+                        timeout=5.0,
+                    )
+                else:
+                    resp = await client.get(
+                        "https://dapi.kakao.com/v2/local/search/keyword.json",
+                        params={"query": keyword, "x": lng, "y": lat,
+                                "radius": r, "sort": "distance", "size": size},
+                        headers={"Authorization": f"KakaoAK {kakao_key}"},
+                        timeout=5.0,
+                    )
+                resp.raise_for_status()
+                docs = resp.json().get("documents", [])
+                if docs:
+                    break
+            except Exception as e:
+                print(f"[Places] 카카오 검색 실패(radius={r}): {e}")
+
+        # 1차 fallback: 비슷한 카테고리로 재시도 (카테고리 코드 있어도 실패 시 포함)
+        fallback_kw: str | None = None
+        if not docs:
+            fallback_kw = _get_fallback_keyword(keyword)
+            fallback_code = _KW_TO_CODE.get(fallback_kw) if fallback_kw else None
+            if fallback_kw and fallback_kw != keyword:
+                print(f"[Places] '{keyword}' 결과 없음 → 1차 fallback '{fallback_kw}' 재시도")
+                for r in search_radii:
+                    try:
+                        if fallback_code:
+                            fb_resp = await client.get(
+                                "https://dapi.kakao.com/v2/local/search/category.json",
+                                params={"category_group_code": fallback_code, "x": lng, "y": lat,
+                                        "radius": r, "sort": "distance", "size": size},
+                                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                                timeout=5.0,
+                            )
+                        else:
+                            fb_resp = await client.get(
+                                "https://dapi.kakao.com/v2/local/search/keyword.json",
+                                params={"query": fallback_kw, "x": lng, "y": lat,
+                                        "radius": r, "sort": "distance", "size": size},
+                                headers={"Authorization": f"KakaoAK {kakao_key}"},
+                                timeout=5.0,
+                            )
+                        fb_resp.raise_for_status()
+                        docs = fb_resp.json().get("documents", [])
+                        if docs:
+                            exclude_keywords = category_excludes.get(fallback_code or "", [])
+                            break
+                    except Exception as e:
+                        print(f"[Places] 1차 fallback 검색 실패(radius={r}): {e}")
+
+        # 2차 fallback: 규칙 없는 키워드도 문맥으로 대분류 시도
+        _FOOD_HINTS = {"음식", "식당", "맛집", "레스토랑", "먹", "요리", "한식", "일식", "중식", "양식"}
+        _CAFE_HINTS = {"카페", "커피", "디저트", "케이크", "브런치", "베이커리"}
+        if not docs:
+            kw_lower = keyword.lower()
+            fb2_code: str | None = None
+            if any(h in kw_lower for h in _CAFE_HINTS) or (fallback_kw and any(h in fallback_kw for h in _CAFE_HINTS)):
+                fb2_code = "CE7"
+            elif any(h in kw_lower for h in _FOOD_HINTS) or (fallback_kw and any(h in fallback_kw for h in _FOOD_HINTS)):
+                fb2_code = "FD6"
+            if fb2_code and fb2_code != category_code:
+                print(f"[Places] '{keyword}' 2차 fallback → 카테고리 {fb2_code}")
+                for r in search_radii:
+                    try:
+                        fb_resp = await client.get(
+                            "https://dapi.kakao.com/v2/local/search/category.json",
+                            params={"category_group_code": fb2_code, "x": lng, "y": lat,
+                                    "radius": r, "sort": "distance", "size": size},
+                            headers={"Authorization": f"KakaoAK {kakao_key}"},
+                            timeout=5.0,
+                        )
+                        fb_resp.raise_for_status()
+                        docs = fb_resp.json().get("documents", [])
+                        if docs:
+                            break
+                    except Exception as e:
+                        print(f"[Places] 2차 fallback 검색 실패(radius={r}): {e}")
+
+        # min_radius 필터 적용, 결과가 다 걸러지면 min_radius 제거
+        filtered_docs = [
+            d for d in docs
+            if float(d.get("distance", 0)) >= min_radius
+            and not any(ex in d.get("category_name", "") for ex in exclude_keywords)
+        ]
+        if not filtered_docs and docs:
+            filtered_docs = [
+                d for d in docs
+                if not any(ex in d.get("category_name", "") for ex in exclude_keywords)
+            ]
+
+        # 평점 병렬 조회
+        ratings_list: list[tuple[float, int]] = [(0.0, 0)] * len(filtered_docs)
+        if filtered_docs:
+            fetched = await asyncio.gather(*[
+                _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in filtered_docs
+            ])
+            ratings_list = list(fetched)
+            # 평점 있는 결과가 하나라도 있으면 평점 내림차순 정렬
+            if any(r[0] > 0 for r in ratings_list):
+                paired = sorted(zip(filtered_docs, ratings_list),
+                                key=lambda x: x[1][0], reverse=True)
+                filtered_docs = [d for d, _ in paired]
+                ratings_list = [r for _, r in paired]
+
+        for i, doc in enumerate(filtered_docs):
+            rating, review_cnt = ratings_list[i]
+            dist_m = float(doc.get("distance", 0))
+            dist_str = f"{int(dist_m)}m" if dist_m < 1000 else f"{dist_m/1000:.1f}km"
+            places.append({
+                "id": doc.get("id", str(i)),
+                "name": doc.get("place_name", ""),
+                "category": doc.get("category_name", "").split(" > ")[-1],
+                "distance": dist_str,
+                "address": doc.get("road_address_name") or doc.get("address_name", ""),
+                "rating": rating,
+                "reviewCount": review_cnt,
+                "aiRecommended": False,
+                "lat": float(doc.get("y", lat)),
+                "lng": float(doc.get("x", lng)),
+                "url": doc.get("place_url", ""),
+            })
+    except Exception as e:
+        print(f"[Places] 카카오 검색 실패: {e}")
+
+    return {"places": places, "category": category_code, "keyword": keyword}
 
 
 if __name__ == "__main__":
