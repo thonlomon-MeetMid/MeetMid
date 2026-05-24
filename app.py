@@ -684,14 +684,20 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
 
     async def _fetch_category(code, radius):
         try:
+            # AT4(관광명소)는 산 제외 필터링을 위해 후보 여러 개 조회
+            size = 5 if code == "AT4" else 1
             resp = await client.get(
                 "https://dapi.kakao.com/v2/local/search/category.json",
                 params={"category_group_code": code, "x": lng, "y": lat,
-                        "radius": radius, "sort": "distance", "size": 1},
+                        "radius": radius, "sort": "distance", "size": size},
                 headers={"Authorization": f"KakaoAK {kakao_key}"},
                 timeout=5.0,
             )
             docs = resp.json().get("documents", [])
+            if code == "AT4":
+                # 카테고리 leaf가 "산"인 항목 제외 (예: "여행 > 관광,명소 > 자연명소 > 산")
+                docs = [d for d in docs
+                        if d.get("category_name", "").split(" > ")[-1].strip() != "산"]
             if docs:
                 doc = docs[0]
                 return {

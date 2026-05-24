@@ -750,109 +750,94 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     final isCurrentUser = m.name == currentUserName;
     final isMemberHost = m.name == hostId;
     final hasAddress = m.departure.isNotEmpty;
-    final showInlineKick = isHost && !isCurrentUser && !hasAddress;
-    final canLongPress = isHost && !isCurrentUser;
+    final canManageMember = isHost && !isCurrentUser;
 
-    return GestureDetector(
-      onLongPress: canLongPress ? () => _showMemberActions(m) : null,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: AppColors.border),
-        ),
-        child: Row(
-          children: [
-            Expanded(
-              child: Row(
-                children: [
-                  Text(
-                    m.name,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textDark,
-                    ),
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: EdgeInsets.fromLTRB(14, 13, canManageMember ? 4 : 14, 13),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Text(
+                  m.name,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.textDark,
                   ),
-                  if (isMemberHost) ...[
-                    const SizedBox(width: 6),
-                    _pill('방장', AppColors.primary, Colors.white),
-                  ],
-                  if (m.isDirectAdded) ...[
-                    const SizedBox(width: 6),
-                    _pill(
-                      '직접추가',
-                      const Color(0xFFE8F0FE),
-                      const Color(0xFF3D5AFE),
-                    ),
-                  ],
-                  if (hasAddress) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      _transportIcon(m.transport),
-                      size: 14,
-                      color: AppColors.textSecondary,
-                    ),
-                  ],
+                ),
+                if (isMemberHost) ...[
+                  const SizedBox(width: 6),
+                  _pill('방장', AppColors.primary, Colors.white),
                 ],
+                if (m.isDirectAdded) ...[
+                  const SizedBox(width: 6),
+                  _pill(
+                    '직접추가',
+                    const Color(0xFFE8F0FE),
+                    const Color(0xFF3D5AFE),
+                  ),
+                ],
+                if (hasAddress) ...[
+                  const SizedBox(width: 6),
+                  Icon(
+                    _transportIcon(m.transport),
+                    size: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (hasAddress)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                const Text(
+                  '완료',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF4CAF50),
+                  ),
+                ),
+                Text(
+                  m.departure,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            )
+          else
+            const Text(
+              '대기중...',
+              style: TextStyle(fontSize: 13, color: AppColors.textHint),
+            ),
+          if (canManageMember)
+            InkWell(
+              onTap: () => _showMemberActions(m),
+              borderRadius: BorderRadius.circular(20),
+              child: const Padding(
+                padding: EdgeInsets.all(6),
+                child: Icon(
+                  Icons.more_vert,
+                  size: 20,
+                  color: AppColors.textSecondary,
+                ),
               ),
             ),
-            if (hasAddress)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  const Text(
-                    '완료',
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                      color: Color(0xFF4CAF50),
-                    ),
-                  ),
-                  Text(
-                    m.departure,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: AppColors.textSecondary,
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              )
-            else
-              Row(
-                children: [
-                  const Text(
-                    '대기중...',
-                    style: TextStyle(fontSize: 13, color: AppColors.textHint),
-                  ),
-                  if (showInlineKick) ...[
-                    const SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => showDialog(
-                        context: context,
-                        builder: (_) => KickConfirmDialog(
-                          memberName: m.name,
-                          onConfirm: () => _kickMember(m.name),
-                        ),
-                      ),
-                      child: const Text(
-                        '강퇴',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.error,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-          ],
-        ),
+        ],
       ),
     );
   }
