@@ -44,11 +44,13 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
     String roomName, {
     String hostName = '',
     String hostUuid = '',
+    String password = '',
   }) async {
     final room = await _repo.createRoomOnServer(
       roomName,
       hostName: hostName,
       hostUuid: hostUuid,
+      password: password,
     );
     if (room != null) {
       state = AsyncData(_repo.getRooms());
@@ -103,11 +105,13 @@ class RoomListNotifier extends AsyncNotifier<List<Room>> {
     required String roomId,
     required String requesterName,
     required String targetName,
+    String targetMemberId = '',
   }) async {
     final success = await _repo.kickMemberOnServer(
       roomId: roomId,
       requesterName: requesterName,
       targetName: targetName,
+      targetMemberId: targetMemberId,
     );
     if (!success) {
       // 서버 실패 시 로컬에서만 제거

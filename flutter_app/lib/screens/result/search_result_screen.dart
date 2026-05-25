@@ -463,6 +463,19 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     }
   }
 
+  Color _memberColor(String name) {
+    final pos = _memberPositions.firstWhere(
+      (p) => p['name'] == name,
+      orElse: () => <String, dynamic>{},
+    );
+    if (pos.isEmpty) return AppColors.success;
+    final hex = ((pos['color'] as String?) ?? '').replaceFirst('#', '');
+    if (hex.length == 6) {
+      return Color(int.parse('FF$hex', radix: 16));
+    }
+    return AppColors.success;
+  }
+
   // ── 지도 영역 위젯 ───────────────────────────────────────────
 
   Widget _buildMapArea() {
@@ -647,9 +660,9 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                           children: [
                             CircleAvatar(
                               radius: 14,
-                              backgroundColor: AppColors.success,
+                              backgroundColor: _memberColor(m.name),
                               child: Text(
-                                m.name[0],
+                                m.name.isNotEmpty ? m.name[0] : '?',
                                 style: const TextStyle(
                                   fontSize: 11,
                                   color: Colors.white,

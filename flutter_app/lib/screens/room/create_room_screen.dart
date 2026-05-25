@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
@@ -17,18 +18,30 @@ class CreateRoomScreen extends ConsumerStatefulWidget {
 
 class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
   final _nameCtrl = TextEditingController();
-  final _descCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  String? _passwordError;
   bool _isLoading = false;
 
   @override
   void dispose() {
     _nameCtrl.dispose();
-    _descCtrl.dispose();
+    _passwordCtrl.dispose();
     super.dispose();
+  }
+
+  bool _validate() {
+    final pw = _passwordCtrl.text;
+    if (pw.isNotEmpty && pw.length != 4) {
+      setState(() => _passwordError = '암호는 숫자 4자리여야 합니다');
+      return false;
+    }
+    setState(() => _passwordError = null);
+    return true;
   }
 
   Future<void> _createRoom() async {
     if (_nameCtrl.text.isEmpty) return;
+    if (!_validate()) return;
 
     setState(() => _isLoading = true);
 
@@ -38,6 +51,7 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
             _nameCtrl.text.trim(),
             hostName: user?.name ?? '',
             hostUuid: user?.id ?? '',
+            password: _passwordCtrl.text.trim(),
           );
 
       if (!mounted) return;
@@ -73,10 +87,63 @@ class _CreateRoomScreenState extends ConsumerState<CreateRoomScreen> {
               controller: _nameCtrl,
             ),
             const SizedBox(height: 24),
-            AppTextField(
-              label: '설명',
-              hint: '방 설명을 입력하세요',
-              controller: _descCtrl,
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Text(
+                      '방 암호',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textDark,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: AppColors.border,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Text(
+                        '선택',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.textSecondary,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _passwordCtrl,
+                  keyboardType: TextInputType.number,
+                  obscureText: true,
+                  maxLength: 4,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  onChanged: (_) {
+                    if (_passwordError != null) _validate();
+                  },
+                  decoration: InputDecoration(
+                    hintText: '숫자 4자리 (입력 안 하면 공개방)',
+                    hintStyle: const TextStyle(fontSize: 14, color: AppColors.textHint),
+                    filled: true,
+                    fillColor: AppColors.inputBackground,
+                    counterText: '',
+                    prefixIcon: const Icon(Icons.lock_outline, size: 18, color: AppColors.textHint),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                    errorText: _passwordError,
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+                  ),
+                ),
+              ],
             ),
             const Spacer(),
             _isLoading
