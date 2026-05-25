@@ -1,5 +1,3 @@
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:js' as js;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -288,10 +286,6 @@ class _PlaceRecommendScreenState extends ConsumerState<PlaceRecommendScreen> {
     return GestureDetector(
       onTap: () {
         setState(() => _selectedPlaceId = place.id);
-        try {
-          js.context.callMethod('flutterMoveMap', [place.lat, place.lng, 4]);
-          js.context.callMethod('flutterMoveMidpointMarker', [place.lat, place.lng, place.name]);
-        } catch (_) {}
       },
       child: Container(
         color: selected ? AppColors.primaryLight : Colors.transparent,

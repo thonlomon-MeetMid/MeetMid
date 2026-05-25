@@ -1,8 +1,11 @@
 import 'package:dio/dio.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import '../models/place.dart';
 
 class ApiClient {
-  static const String baseUrl = 'http://127.0.0.1:5000';
+  final String baseUrl = dotenv.env['API_BASE_URL']?.isNotEmpty == true
+      ? dotenv.env['API_BASE_URL']!
+      : 'http://10.0.2.2:5000';
 
   late final Dio _dio;
 
@@ -12,7 +15,10 @@ class ApiClient {
         baseUrl: baseUrl,
         connectTimeout: const Duration(seconds: 120),
         receiveTimeout: const Duration(seconds: 120),
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'ngrok-skip-browser-warning': '1',
+        },
       ),
     );
   }

@@ -1,15 +1,12 @@
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:js' as js;
-import 'package:flutter/gestures.dart' show PointerScrollEvent;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../core/constants/app_colors.dart';
 import '../../providers/room_provider.dart';
 import '../../data/models/room.dart';
 
-// 기본 위치: 인하대역
 const _kDefaultLat = 37.4508;
 const _kDefaultLng = 126.6573;
 
@@ -25,116 +22,48 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
   final DraggableScrollableController _sheetController =
       DraggableScrollableController();
 
+  GoogleMapController? _mapController;
   Position? _currentPosition;
   bool _locationLoading = false;
-  bool _mapLoading = true;
-  bool _mapInitStarted = false;
 
   @override
   void initState() {
     super.initState();
-    // 이전 지도 상태 초기화
-    try {
-      js.context['_kakaoMapCancelled'] = false;
-      js.context['_kakaoMapPendingCreate'] = null;
-    } catch (_) {}
-    _mapInitStarted = false;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _startMapInit());
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    debugPrint('didChangeDependencies 호출됨 / mapReady: ${js.context['_kakaoMapReady']} / mapLoading: $_mapLoading');
-    if (js.context['_kakaoMapReady'] != true && !_mapLoading) {
-      setState(() => _mapLoading = true);
-      _mapInitStarted = false;
-      _startMapInit();
-    }
+    _initLocation();
   }
 
   @override
   void dispose() {
-    try {
-      js.context.callMethod('flutterDestroyKakaoMap', []);
-    } catch (_) {}
+    _mapController?.dispose();
     _sheetController.dispose();
     super.dispose();
   }
 
-  void _startMapInit() {
-    if (_mapInitStarted) return;
-    _mapInitStarted = true;
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) _initMapWithLocation();
-    });
-  }
-
-  Future<void> _initMapWithLocation() async {
-    double lat = _kDefaultLat;
-    double lng = _kDefaultLng;
-
+  Future<void> _initLocation() async {
     try {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (serviceEnabled) {
-        var permission = await Geolocator.checkPermission();
-        if (permission == LocationPermission.denied) {
-          permission = await Geolocator.requestPermission();
-        }
-        if (permission == LocationPermission.whileInUse ||
-            permission == LocationPermission.always) {
-          final position = await Geolocator.getCurrentPosition(
-            locationSettings: const LocationSettings(
-              accuracy: LocationAccuracy.high,
+      if (!serviceEnabled) return;
+      var permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        final position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+          ),
+        ).timeout(const Duration(seconds: 6));
+        if (mounted) {
+          setState(() => _currentPosition = position);
+          _mapController?.animateCamera(
+            CameraUpdate.newLatLng(
+              LatLng(position.latitude, position.longitude),
             ),
-          ).timeout(const Duration(seconds: 6));
-          lat = position.latitude;
-          lng = position.longitude;
-          if (mounted) setState(() => _currentPosition = position);
+          );
         }
       }
     } catch (_) {}
-
-    if (!mounted) return;
-    _initKakaoMap(lat, lng);
-    _pollMapReady();
-  }
-
-  Future<void> _pollMapReady() async {
-    for (int i = 0; i < 50; i++) {
-      await Future.delayed(const Duration(milliseconds: 200));
-      if (!mounted) return;
-      if (js.context['_kakaoMapReady'] == true) {
-        setState(() => _mapLoading = false);
-        if (_currentPosition != null) {
-          try {
-            js.context.callMethod('flutterUpdateMyLocation', [
-              _currentPosition!.latitude,
-              _currentPosition!.longitude,
-            ]);
-          } catch (_) {}
-        }
-        return;
-      }
-    }
-    if (mounted) setState(() => _mapLoading = false);
-  }
-
-  void _initKakaoMap(double lat, double lng) {
-    try {
-      js.context.callMethod('flutterCreateKakaoMapInBody', [lat, lng]);
-    } catch (e) {
-      debugPrint('카카오맵 초기화 오류: $e');
-      if (mounted) setState(() => _mapLoading = false);
-    }
-  }
-
-  void _moveMapTo(double lat, double lng, {int level = 3}) {
-    try {
-      js.context.callMethod('flutterMoveMap', [lat, lng, level]);
-    } catch (e) {
-      debugPrint('지도 이동 오류: $e');
-    }
   }
 
   Future<void> _getCurrentLocation() async {
@@ -143,9 +72,9 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('위치 서비스를 켜주세요')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('위치 서비스를 켜주세요')),
+          );
         }
         return;
       }
@@ -155,18 +84,18 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
           if (mounted) {
-            ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(const SnackBar(content: Text('위치 권한을 허용해주세요')));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('위치 권한을 허용해주세요')),
+            );
           }
           return;
         }
       }
       if (permission == LocationPermission.deniedForever) {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('설정에서 위치 권한을 허용해주세요')),
+          );
         }
         return;
       }
@@ -181,13 +110,11 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
           _currentPosition = position;
           _locationLoading = false;
         });
-        _moveMapTo(position.latitude, position.longitude);
-        try {
-          js.context.callMethod('flutterUpdateMyLocation', [
-            position.latitude,
-            position.longitude,
-          ]);
-        } catch (_) {}
+        _mapController?.animateCamera(
+          CameraUpdate.newLatLng(
+            LatLng(position.latitude, position.longitude),
+          ),
+        );
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
@@ -199,9 +126,9 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('위치를 가져올 수 없습니다')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('위치를 가져올 수 없습니다')),
+        );
       }
     } finally {
       if (mounted) setState(() => _locationLoading = false);
@@ -217,59 +144,31 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
     final rooms = ref.watch(roomListProvider).valueOrNull ?? const <Room>[];
     final screenHeight = MediaQuery.of(context).size.height;
 
-    // Scaffold를 투명하게 설정 → 지도 div가 Flutter 캔버스 뒤로 비쳐 보임
     return Scaffold(
-      backgroundColor: Colors.transparent,
       body: Stack(
         children: [
-          // 카카오맵 드래그/줌 — Stack 최하단. event.delta + 5배 gain.
-          Positioned.fill(
-            child: Listener(
-              behavior: HitTestBehavior.translucent,
-              onPointerMove: (event) {
-                try {
-                  js.context.callMethod('flutterPanMap', [
-                    -event.delta.dx * 12.5,
-                    -event.delta.dy * 12.5,
-                  ]);
-                } catch (_) {}
-              },
-              onPointerSignal: (event) {
-                if (event is PointerScrollEvent) {
-                  try {
-                    js.context.callMethod('flutterZoomBy', [
-                      event.scrollDelta.dy,
-                    ]);
-                  } catch (_) {}
-                }
-              },
-              child: const SizedBox.expand(),
+          GoogleMap(
+            initialCameraPosition: const CameraPosition(
+              target: LatLng(_kDefaultLat, _kDefaultLng),
+              zoom: 14,
             ),
-          ),
-
-          // 지도 로딩 인디케이터 (지도 준비 전 흰 배경으로 DOM div 가림)
-          if (_mapLoading)
-            Positioned.fill(
-              child: Container(
-                color: Colors.white,
-                child: const Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      CircularProgressIndicator(color: AppColors.primary),
-                      SizedBox(height: 12),
-                      Text(
-                        '지도 불러오는 중...',
-                        style: TextStyle(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
+            onMapCreated: (controller) {
+              _mapController = controller;
+              if (_currentPosition != null) {
+                controller.animateCamera(
+                  CameraUpdate.newLatLng(
+                    LatLng(
+                      _currentPosition!.latitude,
+                      _currentPosition!.longitude,
+                    ),
                   ),
-                ),
-              ),
-            ),
+                );
+              }
+            },
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+          ),
 
           // 상단 검색바
           SafeArea(
@@ -394,7 +293,8 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
                     right: 20,
                     bottom: buttonBottom,
                     child: GestureDetector(
-                      onTap: () => setState(() => _fabExpanded = !_fabExpanded),
+                      onTap: () =>
+                          setState(() => _fabExpanded = !_fabExpanded),
                       child: Container(
                         width: 42,
                         height: 42,
@@ -434,7 +334,9 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
               return Container(
                 decoration: const BoxDecoration(
                   color: Colors.white,
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  borderRadius: BorderRadius.vertical(
+                    top: Radius.circular(24),
+                  ),
                   boxShadow: [
                     BoxShadow(
                       color: Colors.black12,
