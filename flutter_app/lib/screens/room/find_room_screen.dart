@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../core/constants/app_colors.dart';
@@ -65,7 +66,7 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
     setState(() => _filtered = _applySearch(_allRooms));
   }
 
-  Future<void> _joinRoom(Map<String, dynamic> room) async {
+  Future<void> _joinRoom(Map<String, dynamic> room, {String password = ''}) async {
     if (_joiningRoomId != null) return;
     final user = ref.read(authProvider).user;
     if (user == null) return;
@@ -79,15 +80,19 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
         address: '',
         transport: 'transit',
         userUuid: user.id,
+        password: password,
       );
       if (result['ok'] == true && mounted) {
         await ref.read(roomListProvider.notifier).refresh();
         if (mounted) context.push('/room/$roomId');
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
+        final msg = e.toString().contains('403')
+            ? '암호가 틀렸습니다'
+            : '참여에 실패했습니다';
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('참여에 실패했습니다')),
+          SnackBar(content: Text(msg)),
         );
       }
     } finally {
@@ -95,7 +100,69 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
     }
   }
 
+  Future<void> _showPasswordDialog(Map<String, dynamic> room) async {
+    final ctrl = TextEditingController();
+    String? errorText;
+
+    final password = await showDialog<String>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setS) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.lock, size: 18, color: AppColors.primary),
+              const SizedBox(width: 8),
+              const Text('암호 입력',
+                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            ],
+          ),
+          content: TextField(
+            controller: ctrl,
+            keyboardType: TextInputType.number,
+            obscureText: true,
+            maxLength: 4,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+            autofocus: true,
+            decoration: InputDecoration(
+              hintText: '숫자 4자리',
+              counterText: '',
+              errorText: errorText,
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('취소',
+                  style: TextStyle(color: AppColors.textSecondary)),
+            ),
+            TextButton(
+              onPressed: () {
+                if (ctrl.text.length != 4) {
+                  setS(() => errorText = '4자리를 입력하세요');
+                  return;
+                }
+                Navigator.pop(ctx, ctrl.text);
+              },
+              style: TextButton.styleFrom(foregroundColor: AppColors.primary),
+              child: const Text('확인',
+                  style: TextStyle(fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (password != null && mounted) _joinRoom(room, password: password);
+  }
+
   Future<void> _showJoinConfirm(Map<String, dynamic> room) async {
+    final hasPassword = room['has_password'] as bool? ?? false;
+    if (hasPassword) {
+      _showPasswordDialog(room);
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -292,13 +359,13 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
     final roomId = room['room_id'] as String;
     final roomName = room['room_name'] as String;
     final memberCount = room['member_count'] as int? ?? 0;
+    final hasPassword = room['has_password'] as bool? ?? false;
     final isJoining = _joiningRoomId == roomId;
 
     return GestureDetector(
       onTap: isJoining ? null : () => _showRoomPreview(room),
       child: Container(
-        padding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
@@ -320,11 +387,22 @@ class _FindRoomScreenState extends ConsumerState<FindRoomScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(roomName,
-                      style: const TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textDark)),
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(roomName,
+                            style: const TextStyle(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.textDark)),
+                      ),
+                      if (hasPassword) ...[
+                        const SizedBox(width: 6),
+                        const Icon(Icons.lock,
+                            size: 14, color: AppColors.textSecondary),
+                      ],
+                    ],
+                  ),
                   const SizedBox(height: 2),
                   Text('$memberCount명 참여 중',
                       style: const TextStyle(

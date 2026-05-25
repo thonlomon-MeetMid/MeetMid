@@ -9,7 +9,7 @@ class RoomRepository {
   final List<Room> _rooms = [];
 
   Member _parseMember(Map<String, dynamic> m) => Member(
-        id: m['name'] as String,
+        id: (m['id'] as String?) ?? (m['name'] as String),
         name: m['name'] as String,
         departure: m['address'] as String,
         transport: TransportMode.values.firstWhere(
@@ -81,19 +81,24 @@ class RoomRepository {
     String roomName, {
     String hostName = '',
     String hostUuid = '',
+    String password = '',
   }) async {
     try {
       final data = await _apiClient.createRoom(
         roomName,
         hostName: hostName,
         hostUuid: hostUuid,
+        password: password,
       );
+      final serverMembers = (data['members'] as List? ?? [])
+          .map((m) => _parseMember(m as Map<String, dynamic>))
+          .toList();
       final room = Room(
         id: data['room_id'] as String,
         name: data['room_name'] as String,
         hostId: (data['host_id'] as String?) ?? hostName,
-        memberCount: 0,
-        members: [],
+        memberCount: serverMembers.length,
+        members: serverMembers,
       );
       _rooms.add(room);
       return room;
@@ -111,6 +116,7 @@ class RoomRepository {
     required String transport,
     String userUuid = '',
     bool isDirectAdded = false,
+    String password = '',
   }) async {
     try {
       final data = await _apiClient.joinRoom(
@@ -120,6 +126,7 @@ class RoomRepository {
         transport: transport,
         userUuid: userUuid,
         isDirectAdded: isDirectAdded,
+        password: password,
       );
       if (data['ok'] == true) {
         final serverMembers = (data['members'] as List)
@@ -145,12 +152,14 @@ class RoomRepository {
     required String roomId,
     required String requesterName,
     required String targetName,
+    String targetMemberId = '',
   }) async {
     try {
       final data = await _apiClient.kickMember(
         roomId: roomId,
         requesterName: requesterName,
         targetName: targetName,
+        targetMemberId: targetMemberId,
       );
       if (data['ok'] == true) {
         final serverMembers = (data['members'] as List)

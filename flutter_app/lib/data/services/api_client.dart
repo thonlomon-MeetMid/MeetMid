@@ -107,6 +107,7 @@ class ApiClient {
     String roomName, {
     String hostName = '',
     String hostUuid = '',
+    String password = '',
   }) async {
     final body = <String, dynamic>{'room_name': roomName};
     if (hostUuid.isNotEmpty) {
@@ -114,6 +115,7 @@ class ApiClient {
     } else {
       body['host_name'] = hostName;
     }
+    if (password.isNotEmpty) body['room_password'] = password;
     final res = await _dio.post('/room', data: body);
     return res.data as Map<String, dynamic>;
   }
@@ -125,6 +127,7 @@ class ApiClient {
     String transport = 'transit',
     String userUuid = '',
     bool isDirectAdded = false,
+    String password = '',
   }) async {
     final body = <String, dynamic>{
       'name': name,
@@ -133,6 +136,7 @@ class ApiClient {
     };
     if (userUuid.isNotEmpty) body['user_uuid'] = userUuid;
     if (isDirectAdded) body['is_direct_added'] = true;
+    if (password.isNotEmpty) body['room_password'] = password;
     final res = await _dio.post('/room/$roomId/join', data: body);
     return res.data as Map<String, dynamic>;
   }
@@ -173,10 +177,12 @@ class ApiClient {
     required String roomId,
     required String requesterName,
     required String targetName,
+    String targetMemberId = '',
   }) async {
     final res = await _dio.post('/room/$roomId/kick', data: {
       'requester_name': requesterName,
       'target_name': targetName,
+      'target_member_id': targetMemberId,
     });
     return res.data as Map<String, dynamic>;
   }

@@ -155,19 +155,21 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
         );
   }
 
-  Future<void> _kickMember(String targetName) async {
+  Future<void> _kickMember(Member m) async {
     final currentUserName = ref.read(authProvider).user?.name ?? '';
     final success = await ref
         .read(roomListProvider.notifier)
         .kickMember(
           roomId: widget.roomId,
           requesterName: currentUserName,
-          targetName: targetName,
+          targetName: m.name,
+          targetMemberId: m.id,
         );
     if (mounted) {
+      final label = m.name.isNotEmpty ? '${m.name}님을' : '멤버를';
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(success ? '$targetName님을 강퇴했습니다' : '강퇴에 실패했습니다'),
+          content: Text(success ? '$label 강퇴했습니다' : '강퇴에 실패했습니다'),
           backgroundColor: success ? null : Colors.orange,
         ),
       );
@@ -373,7 +375,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
                   context: context,
                   builder: (_) => KickConfirmDialog(
                     memberName: m.name,
-                    onConfirm: () => _kickMember(m.name),
+                    onConfirm: () => _kickMember(m),
                   ),
                 );
               },
@@ -409,7 +411,8 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     final currentUserName = currentUser?.name ?? '';
     final isHost = room.hostId.isNotEmpty && room.hostId == currentUserName;
     final myMember = _findMyMember(room.members, currentUserName);
-    final canSearch = myMember?.departure.isNotEmpty == true;
+    final canSearch = room.members.isNotEmpty &&
+        room.members.every((m) => m.departure.isNotEmpty);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
@@ -756,9 +759,11 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       margin: const EdgeInsets.only(bottom: 8),
       padding: EdgeInsets.fromLTRB(14, 13, canManageMember ? 4 : 14, 13),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: isCurrentUser ? const Color(0xFFFFFBE6) : Colors.white,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(
+          color: isCurrentUser ? const Color(0xFFFFE082) : AppColors.border,
+        ),
       ),
       child: Row(
         children: [
@@ -872,7 +877,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
-                '탐색 기준 설정을 먼저 완료해주세요',
+                '모든 참여자가 출발지를 입력해야 탐색할 수 있어요',
                 style: TextStyle(fontSize: 12, color: AppColors.error),
               ),
             ),

@@ -168,20 +168,46 @@ async def _get_car_metrics(client: httpx.AsyncClient, src_lat, src_lng, dst_lat,
 
 # ── Polyline 추출 ─────────────────────────────────────────────────
 
-# ODsay subwayCode → OSM relation ref 매핑
+# ODsay subwayCode → OSM relation ref 매핑 (실제 ODsay 응답에서 확인된 코드 기준)
 _SUBWAY_CODE_TO_OSM_REF: dict = {
-    21: "수인분당", 22: "신분당", 23: "경의",
-    101: "공항", 104: "경춘", 109: "서해",
-    71: "1", 72: "2", 73: "3", 74: "4",   # 부산
-    91: "1", 92: "2",                       # 대구
-    81: "1",                                # 광주
-    131: "1",                               # 대전
+    # 수도권 광역 (ODsay 실측 코드)
+    114: "서해선", 116: "수인분당선",
+    22: "신분당선", 23: "경의중앙선",
+    101: "공항철도", 104: "경춘선",
+    107: "에버라인", 108: "의정부경전철",
+    110: "김포골드라인", 112: "신림선",
+    # 혹시 이전 코드 버전 대비 fallback
+    21: "수인분당선", 109: "서해선",
+    # 인천
+    100: "인천 1호선", 102: "인천 2호선",
+    # 부산
+    71: "1", 72: "2", 73: "3", 74: "4",
+    # 대구
+    91: "1", 92: "2",
+    # 광주
+    81: "1",
+    # 대전
+    131: "1",
+}
+
+# OSM에 ref가 분리 저장된 노선 대체 ref 목록 (단일 쿼리로 union 검색)
+_ALT_OSM_REFS: dict = {
+    "수인분당선": ["수인분당선", "분당선", "수인선"],
+    "경의중앙선": ["경의중앙선", "경의선", "중앙선"],
+    "서해선":    ["서해선"],
 }
 
 # ── 파일 캐시 (역 ID 쌍 → polyline coords) ────────────────────────
 _SUBWAY_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "subway_cache.json")
 _subway_file_cache: dict = {}   # "{sc}:{lo_id}:{hi_id}" → {"coords": [...], "lo_first": bool}
 _osm_subway_cache: dict = {}    # (ref, bbox) → assembled paths (메모리 한정)
+_overpass_semaphore: asyncio.Semaphore | None = None  # 동시 Overpass 요청 제한
+
+def _get_overpass_sem() -> asyncio.Semaphore:
+    global _overpass_semaphore
+    if _overpass_semaphore is None:
+        _overpass_semaphore = asyncio.Semaphore(1)
+    return _overpass_semaphore
 
 
 def _load_subway_file_cache() -> None:
@@ -353,29 +379,55 @@ async def _fetch_osm_paths(client: httpx.AsyncClient, subway_code: int, stations
     ref = _SUBWAY_CODE_TO_OSM_REF.get(subway_code, str(subway_code))
     cache_key = (ref, min_lat, min_lng, max_lat, max_lng)
 
-    if cache_key not in _osm_subway_cache:
-        query = (
-            f'[out:json][timeout:30];'
-            f'relation[type=route][route=subway][ref="{ref}"]'
-            f'({min_lat},{min_lng},{max_lat},{max_lng});'
-            f'way(r);out geom;'
-        )
-        try:
-            resp = await client.get(
-                "https://overpass-api.de/api/interpreter",
-                params={"data": query},
-                headers={"User-Agent": "MeetMidApp/1.0"},
-                timeout=30.0,
-            )
-            resp.raise_for_status()
-            elems = resp.json().get("elements", [])
-            _osm_subway_cache[cache_key] = _assemble_osm_ways(elems)
-            print(f"[SubwayOSM] ref={ref} bbox={min_lat},{min_lng}~{max_lat},{max_lng}: {len(elems)}개 way → {len(_osm_subway_cache[cache_key])}개 경로")
-        except Exception as e:
-            print(f"[SubwayOSM] {e}")
-            _osm_subway_cache[cache_key] = []
+    # 실패 결과는 캐시하지 않음 (타임아웃/에러 시 다음 요청에서 재시도)
+    if cache_key in _osm_subway_cache:
+        return _osm_subway_cache[cache_key]
 
-    return _osm_subway_cache[cache_key]
+    bbox = f"{min_lat},{min_lng},{max_lat},{max_lng}"
+    refs = _ALT_OSM_REFS.get(ref, [ref])
+    route_filter = 'route~"subway|railway|light_rail|train"'
+
+    # ref 기반 + name 기반 union 쿼리 (한 번의 Overpass 호출로 모두 검색)
+    ref_parts = "".join(
+        f'relation[type=route][{route_filter}][ref="{r}"]({bbox});'
+        for r in refs
+    )
+    name_parts = "".join(
+        f'relation[type=route][{route_filter}]["name"~"{r}"]({bbox});'
+        for r in refs
+    )
+    query = f'[out:json][timeout:25];({ref_parts}{name_parts});way(r);out geom;'
+
+    _overpass_mirrors = [
+        "https://overpass-api.de/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
+    ]
+
+    # 동시 Overpass 요청을 직렬화해 rate-limit/타임아웃 방지
+    async with _get_overpass_sem():
+        # 세마포어 대기 중 다른 코루틴이 이미 채웠을 수 있으므로 재확인
+        if cache_key in _osm_subway_cache:
+            return _osm_subway_cache[cache_key]
+
+        for attempt, url in enumerate(_overpass_mirrors):
+            try:
+                resp = await client.get(
+                    url, params={"data": query},
+                    headers={"User-Agent": "MeetMidApp/1.0"},
+                    timeout=25.0,
+                )
+                resp.raise_for_status()
+                elems = resp.json().get("elements", [])
+                paths = _assemble_osm_ways(elems)
+                print(f"[SubwayOSM] ref={ref} bbox={bbox}: {len(elems)}개 way → {len(paths)}개 경로")
+                if paths:
+                    _osm_subway_cache[cache_key] = paths
+                return paths
+            except Exception as e:
+                print(f"[SubwayOSM] 실패(시도{attempt+1}, {ref}): {e}")
+                if attempt < len(_overpass_mirrors) - 1:
+                    await asyncio.sleep(1.0)
+    return []
 
 
 async def _subway_polyline_from_cache(
@@ -515,7 +567,10 @@ async def _transit_polyline(client: httpx.AsyncClient,
                 async_indices.append((i, "bus"))
                 async_coros.append(_car_polyline(client, s_lat, s_lng, e_lat, e_lng))
             elif tt == 1 and len(stations) >= 2:  # 지하철: OSM 실노선
-                subway_code = sub.get("lane", [{}])[0].get("subwayCode", 0)
+                lane = sub.get("lane", [{}])[0]
+                subway_code = lane.get("subwayCode", 0)
+                lane_name = lane.get("name") or lane.get("laneName") or ""
+                print(f"[Transit] 지하철 구간: code={subway_code}, name='{lane_name}', 역수={len(stations)}")
                 async_indices.append((i, "subway"))
                 async_coros.append(_subway_polyline_from_cache(client, stations, subway_code))
 
@@ -524,21 +579,36 @@ async def _transit_polyline(client: httpx.AsyncClient,
 
         all_coords = []
         for i, sub in enumerate(sub_paths):
-            traffic_type = sub.get("trafficType")
+            tt = sub.get("trafficType")
             stations = sub.get("passStopList", {}).get("stations", [])
+            # ODsay가 각 구간의 시작/끝 좌표를 제공
+            sx, sy = sub.get("startX"), sub.get("startY")
+            ex, ey = sub.get("endX"), sub.get("endY")
 
-            if traffic_type in (1, 2):
+            if tt in (1, 2):
                 coords = result_map.get(i, [])
                 if coords:
                     all_coords.extend(coords)
                     continue
-                # fallback: 역/정류장 좌표 직선
-
-            # 도보·fallback: 역/정류장 좌표 순서 연결
-            for station in stations:
-                x, y = station.get("x"), station.get("y")
-                if x is not None and y is not None:
-                    all_coords.append([float(x), float(y)])
+                # fallback: passStopList 역/정류장 좌표 순서 연결
+                if stations:
+                    for st in stations:
+                        x, y = st.get("x"), st.get("y")
+                        if x is not None and y is not None:
+                            all_coords.append([float(x), float(y)])
+                    continue
+                # stations도 없으면 구간 시작/끝 직선
+                if sx and sy:
+                    all_coords.append([float(sx), float(sy)])
+                if ex and ey:
+                    all_coords.append([float(ex), float(ey)])
+            else:
+                # 도보(tt=3): passStopList.stations가 비어있는 경우가 많음
+                # → ODsay가 제공하는 구간 시작/끝 좌표로 직선 연결
+                if sx and sy:
+                    all_coords.append([float(sx), float(sy)])
+                if ex and ey:
+                    all_coords.append([float(ex), float(ey)])
 
         return all_coords
     except Exception as e:
@@ -1296,6 +1366,7 @@ async def _get_members(client: httpx.AsyncClient, room_id: str) -> list:
 
 def _format_member(m: dict) -> dict:
     return {
+        "id": m["id"],
         "name": m["name"],
         "address": m["address"],
         "transport": m["transport"],
@@ -1332,6 +1403,7 @@ class CreateRoomRequest(BaseModel):
     room_name: str
     host_name: str = ""
     host_uuid: str = ""
+    room_password: str = ""
 
 class JoinRoomRequest(BaseModel):
     name: str
@@ -1349,7 +1421,8 @@ class UpdateMemberRequest(BaseModel):
 
 class KickMemberRequest(BaseModel):
     requester_name: str
-    target_name: str
+    target_name: str = ""
+    target_member_id: str = ""
 
 class TransferHostRequest(BaseModel):
     requester_name: str
@@ -1625,7 +1698,7 @@ async def get_rooms_all(request: Request, user_id: str = Query(""), search: str 
     client = _client(request)
     try:
         user_id, search = user_id.strip(), search.strip().lower()
-        rooms = await sb_select(client, "rooms", select="id,room_name,host_id,created_at")
+        rooms = await sb_select(client, "rooms", select="id,room_name,host_id,created_at,password")
 
         if user_id:
             member_rows = await sb_select(client, "members", select="room_id",
@@ -1644,6 +1717,7 @@ async def get_rooms_all(request: Request, user_id: str = Query(""), search: str 
                 "room_name": room["room_name"],
                 "member_count": len(members),
                 "member_names": [m["name"] for m in members],
+                "has_password": bool(room.get("password")),
             })
         return {"rooms": result}
     except Exception as e:
@@ -1676,7 +1750,11 @@ async def create_room(request: Request, data: CreateRoomRequest):
             if not host:
                 raise HTTPException(status_code=500, detail="사용자 처리 실패")
 
-        room_res = await sb_insert(client, "rooms", {"room_name": room_name, "host_id": host["id"]})
+        room_data: dict = {"room_name": room_name, "host_id": host["id"]}
+        raw_pw = data.room_password.strip()
+        if raw_pw:
+            room_data["password"] = _hash_pw(raw_pw)
+        room_res = await sb_insert(client, "rooms", room_data)
         if not room_res:
             raise HTTPException(status_code=500, detail="방 생성 실패")
         room = room_res[0]
@@ -1719,14 +1797,27 @@ async def join_room(room_id: str, request: Request):
     transport = data.get("transport", "transit")
     user_uuid = data.get("user_uuid", "").strip()
     is_direct_added = bool(data.get("is_direct_added", False))
+    room_password = data.get("room_password", "").strip()
 
     if not name:
         raise HTTPException(status_code=400, detail="name이 필요합니다.")
 
     client = _client(request)
     try:
-        if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
+        rooms = await sb_select(client, "rooms", select="id,password", filters={"id": room_id}, limit=1)
+        if not rooms:
             raise HTTPException(status_code=404, detail="존재하지 않는 방입니다.")
+
+        # 이미 멤버거나 방장이 직접 추가한 경우 암호 체크 없이 허용
+        already_member = await sb_select(client, "members", select="id",
+                                         filters={"room_id": room_id, "name": name}, limit=1)
+        if not already_member and not is_direct_added:
+            stored_pw = rooms[0].get("password") or ""
+            if stored_pw:
+                if not room_password:
+                    raise HTTPException(status_code=403, detail="암호가 필요한 방입니다.")
+                if _hash_pw(room_password) != stored_pw:
+                    raise HTTPException(status_code=403, detail="암호가 틀렸습니다.")
 
         resolved_user_id = None
         if user_uuid:
@@ -1736,8 +1827,7 @@ async def join_room(room_id: str, request: Request):
             if guest:
                 resolved_user_id = guest["id"]
 
-        existing = await sb_select(client, "members", select="id",
-                                   filters={"room_id": room_id, "name": name}, limit=1)
+        existing = already_member
         if existing:
             await sb_update(client, "members",
                             {"address": address, "transport": transport},
@@ -1810,8 +1900,9 @@ async def update_member(room_id: str, request: Request, data: UpdateMemberReques
 async def kick_member(room_id: str, request: Request, data: KickMemberRequest):
     requester_name = data.requester_name.strip()
     target_name = data.target_name.strip()
+    target_member_id = data.target_member_id.strip()
 
-    if not requester_name or not target_name:
+    if not requester_name or (not target_name and not target_member_id):
         raise HTTPException(status_code=400, detail="requester_name과 target_name이 필요합니다.")
 
     client = _client(request)
@@ -1826,8 +1917,12 @@ async def kick_member(room_id: str, request: Request, data: KickMemberRequest):
         if (host_user[0]["name"] if host_user else "") != requester_name:
             raise HTTPException(status_code=403, detail="방장만 강퇴할 수 있습니다.")
 
-        target_res = await sb_select(client, "members", select="id",
-                                     filters={"room_id": room_id, "name": target_name}, limit=1)
+        if target_member_id:
+            target_res = await sb_select(client, "members", select="id",
+                                         filters={"id": target_member_id, "room_id": room_id}, limit=1)
+        else:
+            target_res = await sb_select(client, "members", select="id",
+                                         filters={"room_id": room_id, "name": target_name}, limit=1)
         if not target_res:
             raise HTTPException(status_code=404, detail="해당 멤버가 없습니다.")
 
