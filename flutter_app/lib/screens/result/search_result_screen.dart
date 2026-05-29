@@ -100,9 +100,9 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
       if (perm == LocationPermission.denied ||
           perm == LocationPermission.deniedForever) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('위치 권한을 허용해주세요')),
-          );
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('위치 권한을 허용해주세요')));
         }
         return;
       }
@@ -246,16 +246,14 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
           final p = rawPolylines[i] as Map<String, dynamic>;
           final name = p['name'] as String? ?? 'route_$i';
           final coords = p['coords'] as List? ?? [];
-          final points = coords
-              .map((c) {
-                final pair = c as List;
-                // coords are [lng, lat] from backend
-                return LatLng(
-                  (pair[1] as num).toDouble(),
-                  (pair[0] as num).toDouble(),
-                );
-              })
-              .toList();
+          final points = coords.map((c) {
+            final pair = c as List;
+            // coords are [lng, lat] from backend
+            return LatLng(
+              (pair[1] as num).toDouble(),
+              (pair[0] as num).toDouble(),
+            );
+          }).toList();
           if (points.length >= 2) {
             newPolylines.add(
               Polyline(
@@ -338,6 +336,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         )
         .departure;
     final kakaoUrl =
+        'kakaomap://route?sp=${member['lat']},${member['lng']}&ep=$_midLat,$_midLng&by=PUBLICTRANSIT';
+    final kakaoWebUrl =
         'https://map.kakao.com/link/from/$departure,${member['lat']},${member['lng']}/to/$_midAddress,$_midLat,$_midLng';
 
     showModalBottomSheet(
@@ -394,11 +394,14 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                     ),
                     onTap: () async {
                       Navigator.pop(context);
-                      final url = Uri.parse(kakaoUrl);
-                      if (await canLaunchUrl(url)) {
+                      final appUrl = Uri.parse(kakaoUrl);
+                      final webUrl = Uri.parse(kakaoWebUrl);
+                      if (await canLaunchUrl(appUrl)) {
+                        await launchUrl(appUrl);
+                      } else {
                         await launchUrl(
-                          url,
-                          mode: LaunchMode.externalApplication,
+                          webUrl,
+                          mode: LaunchMode.platformDefault,
                         );
                       }
                     },
@@ -448,10 +451,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     final criteria = ref.watch(searchCriteriaProvider);
 
     return Scaffold(
-      appBar: AppHeader(
-        title: '탐색 결과',
-        onBack: () => context.pop(),
-      ),
+      appBar: AppHeader(title: '탐색 결과', onBack: () => context.pop()),
       body: Column(
         children: [
           // ── 지도 영역 280px ──
