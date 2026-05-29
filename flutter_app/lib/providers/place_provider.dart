@@ -6,10 +6,6 @@ import '../data/services/api_client.dart';
 final apiClientProvider = Provider((ref) => ApiClient());
 final placeRepositoryProvider = Provider((ref) => PlaceRepository());
 
-// /midpoint 응답에서 받은 Gemini 카테고리/키워드 저장
-final geminiCategoryProvider = StateProvider<String>((ref) => '');
-final geminiKeywordProvider = StateProvider<String>((ref) => '');
-
 // 중간지점 좌표 + 주소 저장
 final midpointLatProvider = StateProvider<double>((ref) => 0.0);
 final midpointLngProvider = StateProvider<double>((ref) => 0.0);
@@ -18,25 +14,26 @@ final midpointAddressProvider = StateProvider<String>((ref) => '');
 // 장소 확정 시 선택된 Place 전체 저장
 final selectedPlaceProvider = StateProvider<Place?>((ref) => null);
 
+// 카테고리 선택 저장 ('' = 전체, 'FD6' = 식당, 'CE7' = 카페, 등)
+final selectedCategoryCodeProvider = StateProvider<String>((ref) => '');
+
 // 공유 화면 닫힐 때 결과 화면 지도 뷰포트 재적용 신호
 final mapViewportTickProvider = StateProvider<int>((ref) => 0);
 
 class PlaceQuery {
   final String roomId;
-  final String keyword;
+  final String categoryCode;
   final double lat;
   final double lng;
-  final String category;
   final int radius;
   final int minRadius;
 
   const PlaceQuery({
     required this.roomId,
-    required this.keyword,
+    required this.categoryCode,
     required this.lat,
     required this.lng,
-    this.category = '',
-    this.radius = 1000,
+    this.radius = 500,
     this.minRadius = 0,
   });
 
@@ -45,20 +42,18 @@ class PlaceQuery {
       identical(this, other) ||
       other is PlaceQuery &&
           roomId == other.roomId &&
-          keyword == other.keyword &&
+          categoryCode == other.categoryCode &&
           lat == other.lat &&
           lng == other.lng &&
-          category == other.category &&
           radius == other.radius &&
           minRadius == other.minRadius;
 
   @override
   int get hashCode =>
       roomId.hashCode ^
-      keyword.hashCode ^
+      categoryCode.hashCode ^
       lat.hashCode ^
       lng.hashCode ^
-      category.hashCode ^
       radius.hashCode ^
       minRadius.hashCode;
 }
@@ -68,10 +63,9 @@ final placeRecommendProvider =
   final repo = ref.read(placeRepositoryProvider);
   return repo.recommendPlaces(
     roomId: q.roomId,
-    prompt: q.keyword,
+    categoryCode: q.categoryCode,
     lat: q.lat,
     lng: q.lng,
-    category: q.category,
     radius: q.radius,
     minRadius: q.minRadius,
   );

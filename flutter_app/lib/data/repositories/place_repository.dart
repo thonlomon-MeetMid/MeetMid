@@ -6,20 +6,18 @@ class PlaceRepository {
 
   Future<List<Place>> recommendPlaces({
     required String roomId,
-    required String prompt,
+    required String categoryCode,
     required double lat,
     required double lng,
-    String category = '',
-    int radius = 1000,
+    int radius = 500,
     int minRadius = 0,
     int size = 5,
   }) async {
     return _api.getPlaceRecommendations(
       roomId: roomId,
-      prompt: prompt,
+      categoryCode: categoryCode,
       lat: lat,
       lng: lng,
-      category: category,
       radius: radius,
       minRadius: minRadius,
       size: size,

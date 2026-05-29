@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from dotenv import load_dotenv
-from math import radians, sin, cos, asin, sqrt
+from math import radians, sin, cos, asin, sqrt, atan2, degrees as math_degrees
 from pydantic import BaseModel
 import asyncio
 import hashlib
@@ -27,6 +27,17 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     dlng = radians(lng2 - lng1)
     a = sin(dlat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(dlng / 2) ** 2
     return 2 * R * asin(sqrt(a))
+
+
+def _offset_point(lat: float, lng: float, distance_km: float, bearing_deg: float) -> tuple[float, float]:
+    """중심점에서 bearing 방향으로 distance_km 이동한 좌표 반환."""
+    R = 6371
+    d = distance_km / R
+    lat_r, lng_r, b = radians(lat), radians(lng), radians(bearing_deg)
+    lat2 = asin(sin(lat_r) * cos(d) + cos(lat_r) * sin(d) * cos(b))
+    lng2 = lng_r + atan2(sin(b) * sin(d) * cos(lat_r), cos(d) - sin(lat_r) * sin(lat2))
+    return math_degrees(lat2), math_degrees(lng2)
+
 
 # 거리 공평
 def _fair_midpoint(points: list, max_iter: int = 200) -> tuple:
@@ -803,32 +814,45 @@ async def _find_nearby_landmark(client: httpx.AsyncClient, lat: float, lng: floa
     return None
 
 
-async def _get_google_place_rating(client: httpx.AsyncClient, name: str, lat: float, lng: float) -> tuple[float, int]:
-    """Google Places API로 장소 평점/리뷰 수 조회. 실패 시 (0.0, 0) 반환."""
-    api_key = os.getenv("PLACE_API_KEY")
-    if not api_key or not name:
-        return 0.0, 0
+async def _get_google_rating(
+    client: httpx.AsyncClient,
+    google_key: str,
+    place_name: str,
+    lat: float,
+    lng: float,
+) -> dict:
+    """Google Places API (New) Text Search로 별점/리뷰수 조회. 실패 시 rating=0 반환."""
+    if not google_key or not place_name:
+        return {"rating": 0, "review_count": 0}
     try:
-        resp = await client.get(
-            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
-            params={
-                "input": name,
-                "inputtype": "textquery",
-                "fields": "rating,user_ratings_total",
-                "locationbias": f"point:{lat},{lng}",
-                "key": api_key,
+        resp = await client.post(
+            "https://places.googleapis.com/v1/places:searchText",
+            json={
+                "textQuery": place_name,
+                "locationBias": {
+                    "circle": {
+                        "center": {"latitude": lat, "longitude": lng},
+                        "radius": 100,
+                    }
+                },
+            },
+            headers={
+                "X-Goog-Api-Key": google_key,
+                "X-Goog-FieldMask": "places.rating,places.userRatingCount",
             },
             timeout=3.0,
         )
         data = resp.json()
-        candidates = data.get("candidates", [])
-        if candidates:
-            rating = float(candidates[0].get("rating", 0.0) or 0.0)
-            count = int(candidates[0].get("user_ratings_total", 0) or 0)
-            return round(rating, 1), count
-        return 0.0, 0
-    except Exception:
-        return 0.0, 0
+        hits = data.get("places", [])
+        print(f"[Google Rating] {place_name} → hits={len(hits)}, data={data}")
+        if hits:
+            rating = float(hits[0].get("rating", 0) or 0)
+            count = int(hits[0].get("userRatingCount", 0) or 0)
+            return {"rating": round(rating, 1), "review_count": count}
+        return {"rating": 0, "review_count": 0}
+    except Exception as e:
+        print(f"[Google Rating 실패] {place_name}: {e}")
+        return {"rating": 0, "review_count": 0}
 
 
 _GEMINI_PARTICLES = ['입니다', '이에요', '예요', '이다', '으로', '로', '에서', '를', '을', '이가', '가', '이', '은', '는', '도', '만']
@@ -1121,12 +1145,13 @@ async def _find_place_by_prompt(
                 ]
                 if valid_docs:
                     # 평점 병렬 조회 → 평점 있는 것 중 최고점 선택
+                    _gkey = os.getenv("GOOGLE_MAPS_API_KEY", "")
                     ratings = await asyncio.gather(*[
-                        _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in valid_docs
+                        _get_google_rating(client, _gkey, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in valid_docs
                     ])
-                    rated_pairs = [(d, r) for d, r in zip(valid_docs, ratings) if r[0] > 0]
+                    rated_pairs = [(d, r) for d, r in zip(valid_docs, ratings) if r["rating"] > 0]
                     if rated_pairs:
-                        doc = max(rated_pairs, key=lambda x: x[1][0])[0]
+                        doc = max(rated_pairs, key=lambda x: x[1]["rating"])[0]
                     else:
                         doc = _best_doc(valid_docs, search_kw)
                         if doc is None:
@@ -1712,6 +1737,8 @@ async def get_rooms_all(request: Request, user_id: str = Query(""), search: str 
         result = []
         for room in rooms:
             members = await _get_members(client, room["id"])
+            if len(members) >= 4:
+                continue  # 정원 초과 방은 목록에서 제외
             result.append({
                 "room_id": room["id"],
                 "room_name": room["room_name"],
@@ -1811,6 +1838,11 @@ async def join_room(room_id: str, request: Request):
         # 이미 멤버거나 방장이 직접 추가한 경우 암호 체크 없이 허용
         already_member = await sb_select(client, "members", select="id",
                                          filters={"room_id": room_id, "name": name}, limit=1)
+        # 최대 인원 4명 제한 (기존 멤버 업데이트는 허용)
+        if not already_member:
+            current_members = await _get_members(client, room_id)
+            if len(current_members) >= 4:
+                raise HTTPException(status_code=400, detail="최대 4명까지입니다.")
         if not already_member and not is_direct_added:
             stored_pw = rooms[0].get("password") or ""
             if stored_pw:
@@ -2047,7 +2079,9 @@ async def leave_room(room_id: str, request: Request, data: LeaveRoomRequest):
 async def get_midpoint(room_id: str, request: Request,
                        criteria: str = Query("distanceFair"),
                        polyline: bool = Query(False),
-                       prompt: str = Query("")):
+                       prompt: str = Query(""),
+                       override_lat: float = Query(0.0),
+                       override_lng: float = Query(0.0)):
     client = _client(request)
     try:
         if not await sb_select(client, "rooms", select="id", filters={"id": room_id}, limit=1):
@@ -2072,39 +2106,45 @@ async def get_midpoint(room_id: str, request: Request,
             raise HTTPException(status_code=400, detail="좌표를 확인할 수 있는 멤버가 없습니다.")
 
         time_map = {}
-        if criteria == "timeFair" and len(located) >= 2:
-            mid_lat, mid_lng, time_map = await _time_fair_midpoint(client, located)
-        elif criteria == "distanceFair" and len(located) >= 2:
-            mid_lat, mid_lng, _ = await _route_distance_fair_midpoint(client, located)
-        elif criteria in ("majority", "transitFocused") and len(located) >= 2:
-            mid_lat, mid_lng = await _majority_midpoint(client, located)
-        else:
-            mid_lat = sum(m["lat"] for m in located) / len(located)
-            mid_lng = sum(m["lng"] for m in located) / len(located)
-
-        # 랜드마크 검색 → 찾으면 좌표를 중간지점으로 스냅
-        landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
-        if landmark:
-            mid_lat = landmark["lat"]
-            mid_lng = landmark["lng"]
-            mid_address = landmark["name"]
-            time_map = {}  # 랜드마크 좌표 기준으로 재계산
-        else:
-            mid_address = None
-
-        # 프롬프트가 있으면 Gemini로 근처 장소 탐색 → 최종 목적지 대체
-        prompt = prompt.strip()
         gemini_keyword = ""
-        if prompt:
-            print(f"[Midpoint] Gemini 검색 전 좌표: lat={mid_lat}, lng={mid_lng}")
-            place = await _find_place_by_prompt(client, mid_lat, mid_lng, prompt)
-            if place:
-                mid_lat = place["lat"]
-                mid_lng = place["lng"]
-                mid_address = place["name"]
-                gemini_keyword = place.get("keyword", "")
-                time_map = {}  # 새 좌표 기준으로 이동시간 재계산
-                print(f"[Midpoint] Gemini 장소 적용 후 좌표: lat={mid_lat}, lng={mid_lng}, name={mid_address}")
+        if override_lat != 0.0 and override_lng != 0.0:
+            # 장소 선택 시 재계산: 지정 좌표를 목적지로 고정
+            mid_lat, mid_lng = override_lat, override_lng
+            mid_address = None
+        else:
+            if criteria == "timeFair" and len(located) >= 2:
+                mid_lat, mid_lng, time_map = await _time_fair_midpoint(client, located)
+            elif criteria == "distanceFair" and len(located) >= 2:
+                mid_lat, mid_lng, _ = await _route_distance_fair_midpoint(client, located)
+            elif criteria in ("majority", "transitFocused") and len(located) >= 2:
+                mid_lat, mid_lng = await _majority_midpoint(client, located)
+            else:
+                mid_lat = sum(m["lat"] for m in located) / len(located)
+                mid_lng = sum(m["lng"] for m in located) / len(located)
+
+            # 랜드마크 검색 → 찾으면 좌표를 중간지점으로 스냅
+            landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
+            if landmark:
+                mid_lat = landmark["lat"]
+                mid_lng = landmark["lng"]
+                mid_address = landmark["name"]
+                time_map = {}  # 랜드마크 좌표 기준으로 재계산
+            else:
+                mid_address = None
+
+            # 프롬프트가 있으면 Gemini로 근처 장소 탐색 → 최종 목적지 대체
+            prompt = prompt.strip()
+            gemini_keyword = ""
+            if prompt:
+                print(f"[Midpoint] Gemini 검색 전 좌표: lat={mid_lat}, lng={mid_lng}")
+                place = await _find_place_by_prompt(client, mid_lat, mid_lng, prompt)
+                if place:
+                    mid_lat = place["lat"]
+                    mid_lng = place["lng"]
+                    mid_address = place["name"]
+                    gemini_keyword = place.get("keyword", "")
+                    time_map = {}  # 새 좌표 기준으로 이동시간 재계산
+                    print(f"[Midpoint] Gemini 장소 적용 후 좌표: lat={mid_lat}, lng={mid_lng}, name={mid_address}")
 
         # 이동시간 병렬 계산 (timeFair이고 랜드마크 스냅 없으면 기존 값 재사용)
         if not time_map:
@@ -2285,21 +2325,72 @@ async def get_member_polylines(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _ring_search_docs(
+    client: httpx.AsyncClient,
+    kakao_key: str,
+    category_code: str | None,
+    keyword: str,
+    lat: float,
+    lng: float,
+    min_radius: int,
+    radius: int,
+) -> list:
+    """링(min_radius~radius) 내 장소: 링 중심 4방향에서 병렬 검색 후 진거리 필터링."""
+    ring_center_km = (min_radius + radius) / 2000.0
+    ring_half_m = int((radius - min_radius) / 2 * 1.3)
+
+    async def _from_bearing(bearing: int) -> list:
+        o_lat, o_lng = _offset_point(lat, lng, ring_center_km, bearing)
+        try:
+            if category_code:
+                resp = await client.get(
+                    "https://dapi.kakao.com/v2/local/search/category.json",
+                    params={"category_group_code": category_code, "x": o_lng, "y": o_lat,
+                            "radius": ring_half_m, "sort": "distance", "size": 15},
+                    headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=5.0,
+                )
+            else:
+                resp = await client.get(
+                    "https://dapi.kakao.com/v2/local/search/keyword.json",
+                    params={"query": keyword, "x": o_lng, "y": o_lat,
+                            "radius": ring_half_m, "sort": "distance", "size": 15},
+                    headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=5.0,
+                )
+            resp.raise_for_status()
+            result = []
+            for d in resp.json().get("documents", []):
+                true_m = _haversine_km(lat, lng, float(d["y"]), float(d["x"])) * 1000
+                if min_radius <= true_m <= radius:
+                    result.append({**d, "distance": true_m})
+            return result
+        except Exception:
+            return []
+
+    batches = await asyncio.gather(*[_from_bearing(b) for b in [0, 90, 180, 270]])
+    seen: set = set()
+    docs: list = []
+    for batch in batches:
+        for d in batch:
+            if d.get("id") not in seen:
+                seen.add(d.get("id"))
+                docs.append(d)
+    return docs
+
+
 # ── 장소 추천 ──────────────────────────────────────────────────────
 
 @app.get("/room/{room_id}/places")
 async def get_place_recommendations(
     room_id: str,
     request: Request,
-    prompt: str = Query(""),
-    category: str = Query(""),
+    category: str = Query(""),   # 전체=빈값, 식당=FD6, 카페=CE7, 편의점=CS2, 문화시설=CT1, 관광명소=AT4
     lat: float = Query(0.0),
     lng: float = Query(0.0),
-    radius: int = Query(1000),
+    radius: int = Query(500),
     min_radius: int = Query(0),
     size: int = Query(5),
 ):
-    """카카오 카테고리/키워드 검색으로 장소 목록 반환 (Gemini 호출 없음 — /midpoint에서 이미 처리)."""
+    """카카오 카테고리 검색으로 장소 목록 반환 (별점 내림차순)."""
     client = _client(request)
     kakao_key = os.getenv("KAKAO_API_KEY")
 
@@ -2321,9 +2412,10 @@ async def get_place_recommendations(
         except Exception:
             pass
 
+    print(f"[Places 호출] lat={lat}, lng={lng}, category={category}, radius={radius}")
     valid_codes = {"CE7", "FD6", "CT1", "AT4", "SW8", "CS2", "MT1", "PM9", "HP8", "BK9"}
     category_code = category if category in valid_codes else None
-    keyword = prompt.strip() or "카페"
+    keyword = "맛집"  # 전체(category_code=None)일 때 키워드 검색에 사용
 
     # 카테고리별 제외 키워드
     category_excludes = {
@@ -2332,126 +2424,88 @@ async def get_place_recommendations(
     }
     exclude_keywords = category_excludes.get(category_code or "", [])
 
-    # 결과 없으면 반경을 자동 확장
-    search_radii = sorted({radius, 3000, 5000}) if radius < 5000 else [radius]
-
     places = []
     try:
         docs = []
-        for r in search_radii:
+
+        if min_radius > 0:
+            # ── 링 검색: 오프셋 4방향 병렬 검색 ──────────────────
+            docs = await _ring_search_docs(
+                client, kakao_key, category_code, keyword, lat, lng, min_radius, radius
+            )
+            if not docs:
+                fallback_kw = _get_fallback_keyword(keyword)
+                fallback_code = _KW_TO_CODE.get(fallback_kw) if fallback_kw else None
+                if fallback_kw and fallback_kw != keyword:
+                    print(f"[Places] 링 결과 없음 → 1차 fallback '{fallback_kw}'")
+                    docs = await _ring_search_docs(
+                        client, kakao_key, fallback_code, fallback_kw,
+                        lat, lng, min_radius, radius
+                    )
+                    if docs:
+                        exclude_keywords = category_excludes.get(fallback_code or "", [])
+            if not docs:
+                _CAFE_HINTS = {"카페", "커피", "디저트", "케이크", "브런치", "베이커리"}
+                _FOOD_HINTS = {"음식", "식당", "맛집", "레스토랑", "먹", "요리", "한식", "일식", "중식", "양식"}
+                kw_lower = keyword.lower()
+                fb2_code: str | None = None
+                if any(h in kw_lower for h in _CAFE_HINTS):
+                    fb2_code = "CE7"
+                elif any(h in kw_lower for h in _FOOD_HINTS):
+                    fb2_code = "FD6"
+                if fb2_code and fb2_code != category_code:
+                    print(f"[Places] 링 2차 fallback → {fb2_code}")
+                    docs = await _ring_search_docs(
+                        client, kakao_key, fb2_code, keyword, lat, lng, min_radius, radius
+                    )
+
+        else:
+            # ── 500m: 중심점에서 정확도순 검색 ───────────────────
             try:
                 if category_code:
                     resp = await client.get(
                         "https://dapi.kakao.com/v2/local/search/category.json",
                         params={"category_group_code": category_code, "x": lng, "y": lat,
-                                "radius": r, "sort": "distance", "size": size},
-                        headers={"Authorization": f"KakaoAK {kakao_key}"},
-                        timeout=5.0,
+                                "radius": radius, "sort": "accuracy", "size": size},
+                        headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=5.0,
                     )
                 else:
                     resp = await client.get(
                         "https://dapi.kakao.com/v2/local/search/keyword.json",
                         params={"query": keyword, "x": lng, "y": lat,
-                                "radius": r, "sort": "distance", "size": size},
-                        headers={"Authorization": f"KakaoAK {kakao_key}"},
-                        timeout=5.0,
+                                "radius": radius, "sort": "accuracy", "size": size},
+                        headers={"Authorization": f"KakaoAK {kakao_key}"}, timeout=5.0,
                     )
                 resp.raise_for_status()
                 docs = resp.json().get("documents", [])
-                if docs:
-                    break
             except Exception as e:
-                print(f"[Places] 카카오 검색 실패(radius={r}): {e}")
+                print(f"[Places] 카카오 검색 실패(radius={radius}): {e}")
 
-        # 1차 fallback: 비슷한 카테고리로 재시도 (카테고리 코드 있어도 실패 시 포함)
-        fallback_kw: str | None = None
-        if not docs:
-            fallback_kw = _get_fallback_keyword(keyword)
-            fallback_code = _KW_TO_CODE.get(fallback_kw) if fallback_kw else None
-            if fallback_kw and fallback_kw != keyword:
-                print(f"[Places] '{keyword}' 결과 없음 → 1차 fallback '{fallback_kw}' 재시도")
-                for r in search_radii:
-                    try:
-                        if fallback_code:
-                            fb_resp = await client.get(
-                                "https://dapi.kakao.com/v2/local/search/category.json",
-                                params={"category_group_code": fallback_code, "x": lng, "y": lat,
-                                        "radius": r, "sort": "distance", "size": size},
-                                headers={"Authorization": f"KakaoAK {kakao_key}"},
-                                timeout=5.0,
-                            )
-                        else:
-                            fb_resp = await client.get(
-                                "https://dapi.kakao.com/v2/local/search/keyword.json",
-                                params={"query": fallback_kw, "x": lng, "y": lat,
-                                        "radius": r, "sort": "distance", "size": size},
-                                headers={"Authorization": f"KakaoAK {kakao_key}"},
-                                timeout=5.0,
-                            )
-                        fb_resp.raise_for_status()
-                        docs = fb_resp.json().get("documents", [])
-                        if docs:
-                            exclude_keywords = category_excludes.get(fallback_code or "", [])
-                            break
-                    except Exception as e:
-                        print(f"[Places] 1차 fallback 검색 실패(radius={r}): {e}")
-
-        # 2차 fallback: 규칙 없는 키워드도 문맥으로 대분류 시도
-        _FOOD_HINTS = {"음식", "식당", "맛집", "레스토랑", "먹", "요리", "한식", "일식", "중식", "양식"}
-        _CAFE_HINTS = {"카페", "커피", "디저트", "케이크", "브런치", "베이커리"}
-        if not docs:
-            kw_lower = keyword.lower()
-            fb2_code: str | None = None
-            if any(h in kw_lower for h in _CAFE_HINTS) or (fallback_kw and any(h in fallback_kw for h in _CAFE_HINTS)):
-                fb2_code = "CE7"
-            elif any(h in kw_lower for h in _FOOD_HINTS) or (fallback_kw and any(h in fallback_kw for h in _FOOD_HINTS)):
-                fb2_code = "FD6"
-            if fb2_code and fb2_code != category_code:
-                print(f"[Places] '{keyword}' 2차 fallback → 카테고리 {fb2_code}")
-                for r in search_radii:
-                    try:
-                        fb_resp = await client.get(
-                            "https://dapi.kakao.com/v2/local/search/category.json",
-                            params={"category_group_code": fb2_code, "x": lng, "y": lat,
-                                    "radius": r, "sort": "distance", "size": size},
-                            headers={"Authorization": f"KakaoAK {kakao_key}"},
-                            timeout=5.0,
-                        )
-                        fb_resp.raise_for_status()
-                        docs = fb_resp.json().get("documents", [])
-                        if docs:
-                            break
-                    except Exception as e:
-                        print(f"[Places] 2차 fallback 검색 실패(radius={r}): {e}")
-
-        # min_radius 필터 적용, 결과가 다 걸러지면 min_radius 제거
+        # exclude 카테고리 제외
         filtered_docs = [
             d for d in docs
-            if float(d.get("distance", 0)) >= min_radius
-            and not any(ex in d.get("category_name", "") for ex in exclude_keywords)
+            if not any(ex in d.get("category_name", "") for ex in exclude_keywords)
         ]
-        if not filtered_docs and docs:
-            filtered_docs = [
-                d for d in docs
-                if not any(ex in d.get("category_name", "") for ex in exclude_keywords)
-            ]
 
-        # 평점 병렬 조회
-        ratings_list: list[tuple[float, int]] = [(0.0, 0)] * len(filtered_docs)
+        # 구글 Places API로 별점 병렬 조회 (장소당 1회, timeout 3초)
+        google_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+        ratings_list: list[dict] = [{"rating": 0, "review_count": 0}] * len(filtered_docs)
         if filtered_docs:
             fetched = await asyncio.gather(*[
-                _get_google_place_rating(client, d.get("place_name", ""), float(d.get("y", 0)), float(d.get("x", 0))) for d in filtered_docs
+                _get_google_rating(client, google_key, d.get("place_name", ""),
+                                   float(d.get("y", 0)), float(d.get("x", 0)))
+                for d in filtered_docs
             ])
             ratings_list = list(fetched)
-            # 평점 있는 결과가 하나라도 있으면 평점 내림차순 정렬
-            if any(r[0] > 0 for r in ratings_list):
+            # 별점 있는 결과가 하나라도 있으면 내림차순 정렬
+            if any(r["rating"] > 0 for r in ratings_list):
                 paired = sorted(zip(filtered_docs, ratings_list),
-                                key=lambda x: x[1][0], reverse=True)
+                                key=lambda x: x[1]["rating"], reverse=True)
                 filtered_docs = [d for d, _ in paired]
                 ratings_list = [r for _, r in paired]
 
         for i, doc in enumerate(filtered_docs):
-            rating, review_cnt = ratings_list[i]
+            rating, review_cnt = ratings_list[i]["rating"], ratings_list[i]["review_count"]
             dist_m = float(doc.get("distance", 0))
             dist_str = f"{int(dist_m)}m" if dist_m < 1000 else f"{dist_m/1000:.1f}km"
             places.append({
