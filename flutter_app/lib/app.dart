@@ -15,6 +15,7 @@ class MeetMidApp extends ConsumerWidget {
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
       routerConfig: router,
+      builder: (context, child) => SafeArea(child: child!),
     );
   }
 }
