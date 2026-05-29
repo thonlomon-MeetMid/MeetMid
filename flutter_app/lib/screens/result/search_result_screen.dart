@@ -1,3 +1,4 @@
+import 'dart:ui' as ui;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
 import 'dart:math';
@@ -30,12 +31,12 @@ const _kRouteColors = [
   Color(0xFFF44336),
 ];
 
-const _kMarkerHues = [
-  BitmapDescriptor.hueGreen,
-  BitmapDescriptor.hueAzure,
-  BitmapDescriptor.hueOrange,
-  BitmapDescriptor.hueViolet,
-  BitmapDescriptor.hueRed,
+const _kMarkerBorderColors = [
+  Color(0xFF2E7D32),
+  Color(0xFF1565C0),
+  Color(0xFFE65100),
+  Color(0xFF6A1B9A),
+  Color(0xFFB71C1C),
 ];
 
 class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
@@ -154,6 +155,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   Future<void> _refreshLiveLocations() async {
     final locations = await _api.getLiveLocations(widget.roomId);
     if (!mounted) return;
+    final liveIcon = await _createLiveMarker();
     setState(() {
       _markers.removeWhere((m) => m.markerId.value.startsWith('live_'));
       for (final loc in locations) {
@@ -165,9 +167,8 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
           Marker(
             markerId: MarkerId('live_$name'),
             position: LatLng(lat, lng),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              BitmapDescriptor.hueCyan,
-            ),
+            icon: liveIcon,
+            zIndexInt: 1,
             infoWindow: InfoWindow(title: '$name (실시간)'),
           ),
         );
@@ -179,6 +180,83 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     setState(() {
       _markers.removeWhere((m) => m.markerId.value.startsWith('live_'));
     });
+  }
+
+  Future<BitmapDescriptor> _createPinMarker(
+    Color color,
+    Color borderColor,
+  ) async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const size = 80.0;
+
+    final borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.fill;
+    final fillPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+    final polePaint = Paint()
+      ..color = const Color(0xFF333333)
+      ..style = PaintingStyle.fill;
+
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size / 2 - 5, size / 2, 10, size / 2 - 4),
+        const Radius.circular(4),
+      ),
+      borderPaint,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromLTWH(size / 2 - 2.5, size / 2, 5, size / 2 - 6),
+        const Radius.circular(3),
+      ),
+      polePaint,
+    );
+    canvas.drawCircle(Offset(size / 2, size / 2.8), 22, borderPaint);
+    canvas.drawCircle(Offset(size / 2, size / 2.8), 18, fillPaint);
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
+  }
+
+  Future<BitmapDescriptor> _createLiveMarker() async {
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(recorder);
+    const size = 80.0;
+
+    canvas.drawCircle(
+      const Offset(size / 2, size / 2),
+      size / 2,
+      Paint()
+        ..shader = ui.Gradient.radial(
+          const Offset(size / 2, size / 2),
+          size / 2,
+          [const Color(0x6626DE81), const Color(0x0026DE81)],
+        ),
+    );
+    canvas.drawCircle(
+      const Offset(size / 2, size / 2),
+      18,
+      Paint()
+        ..color = Colors.white
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      const Offset(size / 2, size / 2),
+      14,
+      Paint()
+        ..color = const Color(0xFF26DE81)
+        ..style = PaintingStyle.fill,
+    );
+
+    final picture = recorder.endRecording();
+    final image = await picture.toImage(size.toInt(), size.toInt());
+    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
+    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
   }
 
   // ── 지도 마커/폴리라인 로드 ────────────────────────────────────
@@ -216,13 +294,16 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         final lat = (t['lat'] as num).toDouble();
         final lng = (t['lng'] as num).toDouble();
         positions.add({'name': name, 'lat': lat, 'lng': lng, 'colorIndex': i});
+        final icon = await _createPinMarker(
+          _kRouteColors[i % _kRouteColors.length],
+          _kMarkerBorderColors[i % _kMarkerBorderColors.length],
+        );
         newMarkers.add(
           Marker(
             markerId: MarkerId('member_$name'),
             position: LatLng(lat, lng),
-            icon: BitmapDescriptor.defaultMarkerWithHue(
-              _kMarkerHues[i % _kMarkerHues.length],
-            ),
+            icon: icon,
+            zIndexInt: 2,
             infoWindow: InfoWindow(title: name, snippet: '$mins분'),
           ),
         );
