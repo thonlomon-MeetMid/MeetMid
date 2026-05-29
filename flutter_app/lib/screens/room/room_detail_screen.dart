@@ -230,6 +230,16 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
   }
 
   void _showInviteOptions() {
+    final rooms = ref.read(roomListProvider).valueOrNull ?? [];
+    final room = rooms.where((r) => r.id == widget.roomId).firstOrNull;
+    final memberCount = room?.members.length ?? 0;
+
+    if (memberCount >= 4) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('최대 4명까지입니다')),
+      );
+      return;
+    }
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(

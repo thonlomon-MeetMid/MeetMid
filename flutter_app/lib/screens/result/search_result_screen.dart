@@ -13,6 +13,7 @@ import '../../core/constants/app_colors.dart';
 import '../../data/services/api_client.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
+import '../../providers/place_provider.dart';
 import '../../providers/search_provider.dart';
 import '../../widgets/common/app_header.dart';
 
@@ -209,83 +210,6 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     });
   }
 
-  Future<BitmapDescriptor> _createPinMarker(
-    Color color,
-    Color borderColor,
-  ) async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    const size = 80.0;
-
-    final borderPaint = Paint()
-      ..color = borderColor
-      ..style = PaintingStyle.fill;
-    final fillPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-    final polePaint = Paint()
-      ..color = const Color(0xFF333333)
-      ..style = PaintingStyle.fill;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size / 2 - 5, size / 2, 10, size / 2 - 4),
-        const Radius.circular(4),
-      ),
-      borderPaint,
-    );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(size / 2 - 2.5, size / 2, 5, size / 2 - 6),
-        const Radius.circular(3),
-      ),
-      polePaint,
-    );
-    canvas.drawCircle(Offset(size / 2, size / 2.8), 22, borderPaint);
-    canvas.drawCircle(Offset(size / 2, size / 2.8), 18, fillPaint);
-
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(size.toInt(), size.toInt());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-  }
-
-  Future<BitmapDescriptor> _createLiveMarker() async {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-    const size = 80.0;
-
-    canvas.drawCircle(
-      const Offset(size / 2, size / 2),
-      size / 2,
-      Paint()
-        ..shader = ui.Gradient.radial(
-          const Offset(size / 2, size / 2),
-          size / 2,
-          [const Color(0x6626DE81), const Color(0x0026DE81)],
-        ),
-    );
-    canvas.drawCircle(
-      const Offset(size / 2, size / 2),
-      18,
-      Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.fill,
-    );
-    canvas.drawCircle(
-      const Offset(size / 2, size / 2),
-      14,
-      Paint()
-        ..color = const Color(0xFF26DE81)
-        ..style = PaintingStyle.fill,
-    );
-
-    final picture = recorder.endRecording();
-    final image = await picture.toImage(size.toInt(), size.toInt());
-    final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(bytes!.buffer.asUint8List());
-  }
-
   // ── 지도 마커/폴리라인 로드 ────────────────────────────────────
 
   Future<void> _loadMemberMarkers() async {
@@ -336,60 +260,223 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
         );
       }
 
-      final midAddress = result['address'] as String? ?? '중간 지점';
-      newMarkers.add(
-        Marker(
-          markerId: const MarkerId('midpoint'),
-          position: LatLng(midLat, midLng),
-          icon: await _createFlagMarker(
-            const Color(0xFFEB3B5A),
-            const Color(0xFFC0392B),
-          ),
-          zIndex: 3,
-          infoWindow: InfoWindow(title: midAddress),
-        ),
-      );
+      var midAddress = result['address'] as String? ?? '중간 지점';
+      var destLat = midLat;
+      var destLng = midLng;
 
-      final rawPolylines = result['polylines'] as List?;
-      if (rawPolylines != null) {
-        for (int i = 0; i < rawPolylines.length; i++) {
-          final p = rawPolylines[i] as Map<String, dynamic>;
-          final name = p['name'] as String? ?? 'route_$i';
-          final coords = p['coords'] as List? ?? [];
-          final points = coords.map((c) {
-            final pair = c as List;
-            // coords are [lng, lat] from backend
-            return LatLng(
-              (pair[1] as num).toDouble(),
-              (pair[0] as num).toDouble(),
-            );
-          }).toList();
-          if (points.length >= 2) {
-            newPolylines.add(
-              Polyline(
+      // ── 카테고리 선택 시: Places API → 1순위 장소를 목적지로 사전 결정 ──
+      final categoryCode = ref.read(selectedCategoryCodeProvider);
+      if (categoryCode.isNotEmpty) {
+        try {
+          final autoPlaces = await _api.getPlaceRecommendations(
+            roomId: widget.roomId,
+            categoryCode: categoryCode,
+            lat: midLat,
+            lng: midLng,
+            radius: 500,
+            size: 1,
+          );
+          if (autoPlaces.isNotEmpty &&
+              autoPlaces.first.lat != 0 &&
+              autoPlaces.first.lng != 0) {
+            final p = autoPlaces.first;
+            destLat = p.lat;
+            destLng = p.lng;
+            midAddress = p.name;
+
+            // 선택 장소 기준 소요시간 + 폴리라인 재계산 (1회 추가 호출)
+            try {
+              final overr = await _api.getMidpoint(
+                widget.roomId,
+                criteria: criteria.name,
+                polyline: true,
+                overrideLat: destLat,
+                overrideLng: destLng,
+              );
+              final rawOvPoly = overr['polylines'] as List?;
+              if (rawOvPoly != null) {
+                newPolylines.clear();
+                for (int i = 0; i < rawOvPoly.length; i++) {
+                  final rp = rawOvPoly[i] as Map<String, dynamic>;
+                  final rn = rp['name'] as String? ?? 'route_$i';
+                  final pts = (rp['coords'] as List? ?? []).map((c) {
+                    final pair = c as List;
+                    return LatLng((pair[1] as num).toDouble(),
+                        (pair[0] as num).toDouble());
+                  }).toList();
+                  if (pts.length >= 2) {
+                    newPolylines.add(Polyline(
+                      polylineId: PolylineId('route_$rn'),
+                      points: pts,
+                      color: _kRouteColors[i % _kRouteColors.length],
+                      width: 4,
+                    ));
+                  }
+                }
+              }
+              for (final t in (overr['travel_times'] as List? ?? [])) {
+                final n = t['name'] as String? ?? '';
+                final m = (t['minutes'] as num?)?.toInt() ?? 0;
+                if (n.isNotEmpty) minutesMap[n] = m;
+              }
+            } catch (_) {}
+          }
+        } catch (_) {}
+      }
+
+      // 폴리라인 (카테고리 미선택이면 원래 응답 그대로 사용)
+      if (newPolylines.isEmpty) {
+        final rawPolylines = result['polylines'] as List?;
+        if (rawPolylines != null) {
+          for (int i = 0; i < rawPolylines.length; i++) {
+            final p = rawPolylines[i] as Map<String, dynamic>;
+            final name = p['name'] as String? ?? 'route_$i';
+            final coords = p['coords'] as List? ?? [];
+            final points = coords.map((c) {
+              final pair = c as List;
+              return LatLng(
+                (pair[1] as num).toDouble(),
+                (pair[0] as num).toDouble(),
+              );
+            }).toList();
+            if (points.length >= 2) {
+              newPolylines.add(Polyline(
                 polylineId: PolylineId('route_$name'),
                 points: points,
                 color: _kRouteColors[i % _kRouteColors.length],
                 width: 4,
-              ),
-            );
+              ));
+            }
           }
         }
       }
 
+      // 깃발 마커는 최종 목적지(destLat/destLng) 기준
+      newMarkers.add(Marker(
+        markerId: const MarkerId('midpoint'),
+        position: LatLng(destLat, destLng),
+        icon: await _createFlagMarker(
+          const Color(0xFFEB3B5A),
+          const Color(0xFFC0392B),
+        ),
+        zIndex: 3,
+        infoWindow: InfoWindow(title: midAddress),
+      ));
+
       if (mounted) {
+        // provider에도 반영 → place_recommend_screen이 올바른 좌표로 API 호출
+        ref.read(midpointLatProvider.notifier).state = destLat;
+        ref.read(midpointLngProvider.notifier).state = destLng;
         setState(() {
           _markers = newMarkers;
           _polylines = newPolylines;
           _memberPositions = positions;
           _midAddress = midAddress;
           _memberMinutes = minutesMap;
+          _midLat = destLat;
+          _midLng = destLng;
         });
         _fitBounds(newMarkers);
       }
     } catch (e) {
       debugPrint('중간지점 로드 오류: $e');
     }
+  }
+
+  // ── 장소 선택 적용: 마커·폴리라인·소요시간 일괄 갱신 ──
+  Future<void> _applyPlace(String name, double lat, double lng) async {
+    final flagIcon = await _createFlagMarker(
+        const Color(0xFFEB3B5A), const Color(0xFFC0392B));
+    if (!mounted) return;
+
+    // provider에도 반영 → place_recommend_screen이 올바른 좌표로 API 호출
+    ref.read(midpointLatProvider.notifier).state = lat;
+    ref.read(midpointLngProvider.notifier).state = lng;
+    setState(() {
+      _midLat = lat;
+      _midLng = lng;
+      _midAddress = name.isNotEmpty ? name : '선택된 장소';
+      _markers.removeWhere((m) => m.markerId.value == 'midpoint');
+      _markers.add(Marker(
+        markerId: const MarkerId('midpoint'),
+        position: LatLng(lat, lng),
+        icon: flagIcon,
+        zIndex: 3,
+        infoWindow: InfoWindow(title: _midAddress),
+      ));
+    });
+    _mapController?.animateCamera(CameraUpdate.newLatLng(LatLng(lat, lng)));
+
+    // 선택 장소 기준 소요시간 + 폴리라인 재계산
+    try {
+      final criteria = ref.read(searchCriteriaProvider);
+      final r = await _api.getMidpoint(
+        widget.roomId,
+        criteria: criteria.name,
+        polyline: true,
+        overrideLat: lat,
+        overrideLng: lng,
+      );
+      if (!mounted) return;
+
+      // 폴리라인 갱신
+      final rawPolylines = r['polylines'] as List?;
+      final newPolylines = <Polyline>{};
+      if (rawPolylines != null) {
+        for (int i = 0; i < rawPolylines.length; i++) {
+          final p = rawPolylines[i] as Map<String, dynamic>;
+          final pName = p['name'] as String? ?? 'route_$i';
+          final coords = p['coords'] as List? ?? [];
+          final points = coords.map((c) {
+            final pair = c as List;
+            return LatLng(
+              (pair[1] as num).toDouble(),
+              (pair[0] as num).toDouble(),
+            );
+          }).toList();
+          if (points.length >= 2) {
+            newPolylines.add(Polyline(
+              polylineId: PolylineId('route_$pName'),
+              points: points,
+              color: _kRouteColors[i % _kRouteColors.length],
+              width: 4,
+            ));
+          }
+        }
+      }
+
+      // 소요시간 갱신
+      final travelTimes = r['travel_times'] as List? ?? [];
+      final minutesMap = <String, int>{};
+      for (final t in travelTimes) {
+        final n = t['name'] as String? ?? '';
+        final m = (t['minutes'] as num?)?.toInt() ?? 0;
+        if (n.isNotEmpty) minutesMap[n] = m;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _polylines = newPolylines;
+        _memberMinutes = minutesMap;
+      });
+      _fitBounds({..._markers});
+    } catch (e) {
+      debugPrint('장소 적용 오류: $e');
+    }
+  }
+
+
+
+  // ── 장소 추천 화면 열기 → 결과 받아 적용 ──
+  Future<void> _openRecommend(BuildContext ctx) async {
+    final result = await ctx.push<Map<String, dynamic>?>(
+        '/room/${widget.roomId}/recommend');
+    if (!mounted || result == null) return;
+
+    final name = result['name'] as String? ?? '';
+    final lat = (result['lat'] as num?)?.toDouble() ?? _midLat;
+    final lng = (result['lng'] as num?)?.toDouble() ?? _midLng;
+    await _applyPlace(name, lat, lng);
   }
 
   void _fitBounds(Set<Marker> markers) {
@@ -876,8 +963,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
             child: SizedBox(
               width: double.infinity,
               child: OutlinedButton(
-                onPressed: () =>
-                    context.push('/room/${widget.roomId}/recommend'),
+                onPressed: () => _openRecommend(context),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: AppColors.border),
                   foregroundColor: AppColors.textDark,

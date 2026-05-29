@@ -115,14 +115,6 @@ class _MainMapScreenState extends ConsumerState<MainMapScreen> {
             LatLng(position.latitude, position.longitude),
           ),
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              '현재 위치: ${position.latitude.toStringAsFixed(4)}, ${position.longitude.toStringAsFixed(4)}',
-            ),
-            duration: const Duration(seconds: 2),
-          ),
-        );
       }
     } catch (_) {
       if (mounted) {

@@ -244,12 +244,20 @@ class ApiClient {
     return List<Map<String, dynamic>>.from(res.data['places'] as List);
   }
 
-  Future<Map<String, dynamic>> getMidpoint(String roomId, {String criteria = 'distanceFair', bool polyline = false, String prompt = ''}) async {
+  Future<Map<String, dynamic>> getMidpoint(String roomId, {
+    String criteria = 'distanceFair',
+    bool polyline = false,
+    String prompt = '',
+    double? overrideLat,
+    double? overrideLng,
+  }) async {
     final params = <String, dynamic>{
       'criteria': criteria,
       'polyline': polyline ? '1' : '0',
     };
     if (prompt.isNotEmpty) params['prompt'] = prompt;
+    if (overrideLat != null) params['override_lat'] = overrideLat;
+    if (overrideLng != null) params['override_lng'] = overrideLng;
     final res = await _dio.get('/midpoint/$roomId', queryParameters: params);
     return res.data as Map<String, dynamic>;
   }
@@ -307,11 +315,10 @@ class ApiClient {
 
   Future<List<Place>> getPlaceRecommendations({
     required String roomId,
-    required String prompt,
+    required String categoryCode,
     required double lat,
     required double lng,
-    String category = '',
-    int radius = 1000,
+    int radius = 500,
     int minRadius = 0,
     int size = 5,
   }) async {
@@ -323,8 +330,7 @@ class ApiClient {
         'size': size,
       };
       if (minRadius > 0) params['min_radius'] = minRadius;
-      if (prompt.isNotEmpty) params['prompt'] = prompt;
-      if (category.isNotEmpty) params['category'] = category;
+      if (categoryCode.isNotEmpty) params['category'] = categoryCode;
       final res = await _dio.get('/room/$roomId/places', queryParameters: params);
       final docs = res.data['places'] as List? ?? [];
       return docs.map((e) => Place.fromJson(e as Map<String, dynamic>)).toList();
