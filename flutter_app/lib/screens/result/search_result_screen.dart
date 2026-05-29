@@ -1,3 +1,4 @@
+import '../../data/models/transport_mode.dart';
 import 'dart:ui' as ui;
 import 'package:url_launcher/url_launcher.dart';
 import 'dart:async';
@@ -59,6 +60,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   GoogleMapController? _mapController;
   final _api = ApiClient();
   List<Map<String, dynamic>> _memberPositions = [];
+  Map<Color, BitmapDescriptor> _liveIconCache = {};
   String _midAddress = '중간 지점';
   double _midLat = 0;
   double _midLng = 0;
@@ -171,24 +173,33 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
   Future<void> _refreshLiveLocations() async {
     final locations = await _api.getLiveLocations(widget.roomId);
     if (!mounted) return;
-    final liveIcon = await _createLiveMarker();
+  
+    final List<Marker> liveMarkers = [];
+    for (final loc in locations) {
+      final name = loc['name'] as String? ?? '';
+      final lat = (loc['lat'] as num?)?.toDouble();
+      final lng = (loc['lng'] as num?)?.toDouble();
+      if (lat == null || lng == null || lat == 0) continue;
+      final memberPos = _memberPositions.firstWhere(
+        (p) => p['name'] == name,
+        orElse: () => <String, dynamic>{},
+      );
+      final colorIndex = memberPos.isEmpty ? 0 : (memberPos['colorIndex'] as int? ?? 0);
+      final memberColor = _kRouteColors[colorIndex % _kRouteColors.length];
+      final liveIcon = _liveIconCache[memberColor] ?? 
+          await _createLiveMarker(memberColor);
+      _liveIconCache[memberColor] = liveIcon;
+      liveMarkers.add(Marker(
+        markerId: MarkerId('live_$name'),
+        position: LatLng(lat, lng),
+        icon: liveIcon,
+        zIndex: 2,
+        infoWindow: InfoWindow(title: '$name (실시간)'),
+      ));
+    }
     setState(() {
       _markers.removeWhere((m) => m.markerId.value.startsWith('live_'));
-      for (final loc in locations) {
-        final name = loc['name'] as String? ?? '';
-        final lat = (loc['lat'] as num?)?.toDouble();
-        final lng = (loc['lng'] as num?)?.toDouble();
-        if (lat == null || lng == null || lat == 0) continue;
-        _markers.add(
-          Marker(
-            markerId: MarkerId('live_$name'),
-            position: LatLng(lat, lng),
-            icon: liveIcon,
-            zIndex: 1,
-            infoWindow: InfoWindow(title: '$name (실시간)'),
-          ),
-        );
-      }
+      _markers.addAll(liveMarkers);
     });
   }
 
@@ -242,7 +253,7 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
             markerId: MarkerId('member_$name'),
             position: LatLng(lat, lng),
             icon: icon,
-            zIndex: 2,
+            zIndex: 1,
             infoWindow: InfoWindow(title: name, snippet: '$mins분'),
           ),
         );
@@ -378,28 +389,28 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
     return BitmapDescriptor.fromBytes(bytes!.buffer.asUint8List());
   }
 
-  Future<BitmapDescriptor> _createLiveMarker() async {
+  Future<BitmapDescriptor> _createLiveMarker([Color color = const Color(0xFF26DE81)]) async {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
-    const size = 80.0;
+    const size = 120.0;
 
     // 그라데이션 퍼지는 큰 원
     final gradientPaint = Paint()
       ..shader = ui.Gradient.radial(
-        Offset(size/2, size/2),
+        const Offset(size/2, size/2),
         size/2,
         [
-          const Color(0x6626DE81),
-          const Color(0x0026DE81),
+          color.withOpacity(0.7),
+          color.withOpacity(0.0),
         ],
       );
     canvas.drawCircle(const Offset(size/2, size/2), size/2, gradientPaint);
 
     // 흰 테두리 원
-    canvas.drawCircle(const Offset(size/2, size/2), 18, Paint()..color = Colors.white..style = PaintingStyle.fill);
+    canvas.drawCircle(const Offset(size/2, size/2), size/6, Paint()..color = Colors.white..style = PaintingStyle.fill);
 
-    // 초록 내부 원
-    canvas.drawCircle(const Offset(size/2, size/2), 14, Paint()..color = const Color(0xFF26DE81)..style = PaintingStyle.fill);
+    // 내부 색상 원
+    canvas.drawCircle(const Offset(size/2, size/2), size/7, Paint()..color = color..style = PaintingStyle.fill);
 
     final picture = recorder.endRecording();
     final image = await picture.toImage(size.toInt(), size.toInt());
@@ -604,15 +615,17 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
               ),
               onMapCreated: (controller) {
                 _mapController = controller;
-                if (_markers.isNotEmpty) {
-                  Future.delayed(const Duration(milliseconds: 300), () {
+                Future.delayed(const Duration(milliseconds: 1500), () {
+                  controller.showMarkerInfoWindow(const MarkerId('midpoint'));
+                  if (_markers.isNotEmpty) {
                     _fitBounds(_markers);
-                  });
-                }
+                  }
+                });
               },
               markers: _markers,
               polylines: _polylines,
               zoomControlsEnabled: false,
+              mapToolbarEnabled: false,
               myLocationButtonEnabled: false,
             ),
           ),
@@ -710,12 +723,28 @@ class _SearchResultScreenState extends ConsumerState<SearchResultScreen> {
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Text(
-                              m.name,
-                              style: const TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textDark,
-                              ),
+                            Row(
+                              children: [
+                                Text(
+                                  m.name,
+                                  style: const TextStyle(
+                                    fontSize: 14,
+                                    color: AppColors.textDark,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(
+                                  m.transport == TransportMode.transit
+                                      ? Icons.directions_transit
+                                      : m.transport == TransportMode.car
+                                          ? Icons.directions_car
+                                          : m.transport == TransportMode.walk
+                                              ? Icons.directions_walk
+                                              : Icons.directions_bike,
+                                  size: 14,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ],
                             ),
                             const Spacer(),
                             Row(
