@@ -6,6 +6,7 @@ const _kUserId = 'auth_user_id';
 const _kUserName = 'auth_user_name';
 const _kUserUsername = 'auth_user_username';
 const _kUserEmail = 'auth_user_email';
+const _kSavedUsername = 'login_saved_username'; // "아이디 저장" 체크박스용
 
 class AuthRepository {
   final ApiClient _apiClient;
@@ -80,6 +81,21 @@ class AuthRepository {
     await prefs.remove(_kUserName);
     await prefs.remove(_kUserUsername);
     await prefs.remove(_kUserEmail);
+  }
+
+  Future<String?> loadSavedUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_kSavedUsername);
+  }
+
+  Future<void> saveUsername(String username) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kSavedUsername, username);
+  }
+
+  Future<void> clearSavedUsername() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_kSavedUsername);
   }
 
   Future<void> _saveUser(User user) async {

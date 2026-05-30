@@ -1,11 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../constants/app_colors.dart';
 
 class AppTheme {
   AppTheme._();
 
-  static ThemeData get light => ThemeData(
+  static ThemeData get light {
+    // NotoSansKR: Pretendard 대체 (한글 고품질 고딕, 가중치 체계 동일)
+    final notoKr = GoogleFonts.notoSansKr();
+    return ThemeData(
         useMaterial3: true,
+        fontFamily: notoKr.fontFamily,
         colorScheme: ColorScheme.fromSeed(
           seedColor: AppColors.primary,
           primary: AppColors.primary,
@@ -90,4 +95,5 @@ class AppTheme {
           ),
         ),
       );
+  }
 }

@@ -56,4 +56,20 @@ class AppColors {
   // Info banner
   static const Color infoBannerBg = Color(0xFFEFF6FF);
   static const Color infoBannerText = Color(0xFF1D4ED8);
+
+  // ── 로그인 화면 브랜드 토큰 (쿨 인디고-블루 팔레트) ──
+  static const Color brandPrimary     = Color(0xFF3A55E8);
+  static const Color brandPrimaryDeep = Color(0xFF2A3FCB);
+  static const Color brandPrimaryBright = Color(0xFF5A74FF);
+  static const Color brandCoral       = Color(0xFFFF7A57); // 서브카피 "딱 중간" 강조
+  // 중립 쿨 블루그레이
+  static const Color brandInk         = Color(0xFF1E2430);
+  static const Color brandInkSoft     = Color(0xFF323A48);
+  static const Color brandMuted       = Color(0xFFA3ADBD);
+  static const Color brandMutedDeep   = Color(0xFF5C677A);
+  // 입력창
+  static const Color brandField       = Color(0xFFEEF2F9);
+  static const Color brandFieldBorder = Color(0xFFE2E8F2);
+  static const Color brandLine        = Color(0xFFE7ECF4);
+  static const Color brandBg          = Color(0xFFFFFFFF);
 }
