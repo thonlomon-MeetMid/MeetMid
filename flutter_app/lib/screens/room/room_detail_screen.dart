@@ -421,8 +421,13 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
     final currentUserName = currentUser?.name ?? '';
     final isHost = room.hostId.isNotEmpty && room.hostId == currentUserName;
     final myMember = _findMyMember(room.members, currentUserName);
-    final canSearch = room.members.isNotEmpty &&
-        room.members.every((m) => m.departure.isNotEmpty);
+    final memberCount = room.members.length;
+    final allHaveAddress =
+        room.members.isNotEmpty && room.members.every((m) => m.departure.isNotEmpty);
+    final canSearch = memberCount >= 2 && allHaveAddress;
+    final String? searchBlockMessage = memberCount < 2
+        ? '한명일때는 탐색할 수 없습니다. 두명 이상 탐색해주세요!'
+        : (!allHaveAddress ? '모든 참여자가 출발지를 입력해야 탐색할 수 있어요' : null);
 
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
@@ -465,7 +470,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
               ),
             ),
           ),
-          _bottomSection(canSearch),
+          _bottomSection(canSearch, searchBlockMessage),
         ],
       ),
     );
@@ -873,7 +878,7 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
 
   // ── 하단 버튼 ─────────────────────────────────────────────
 
-  Widget _bottomSection(bool canSearch) {
+  Widget _bottomSection(bool canSearch, String? blockMessage) {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 16),
       decoration: const BoxDecoration(
@@ -883,12 +888,12 @@ class _RoomDetailScreenState extends ConsumerState<RoomDetailScreen> {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          if (!canSearch)
+          if (blockMessage != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Text(
-                '모든 참여자가 출발지를 입력해야 탐색할 수 있어요',
-                style: TextStyle(fontSize: 12, color: AppColors.error),
+                blockMessage,
+                style: const TextStyle(fontSize: 12, color: AppColors.error),
               ),
             ),
           Row(
