@@ -11,6 +11,7 @@ import json
 import os
 import re
 import sys
+import time
 import uuid
 
 load_dotenv()
@@ -179,18 +180,28 @@ async def _get_car_metrics(client: httpx.AsyncClient, src_lat, src_lng, dst_lat,
 
 # ── Polyline 추출 ─────────────────────────────────────────────────
 
-# ODsay subwayCode → OSM relation ref 매핑 (실제 ODsay 응답에서 확인된 코드 기준)
+# ── OSM 태그 실증 데이터 기반 매핑 ──────────────────────────────────
+# ODsay subwayCode → OSM relation ref 태그 정확한 값
+# 확인 출처: Overpass API 직접 조회 (2024)
+#   신분당(ref="신분당"), 경춘(ref="경춘"), 공항철도(ref="공항철도"|"AREX"),
+#   인천2호선(ref="I2"), 인천1호선(ref="I1")
 _SUBWAY_CODE_TO_OSM_REF: dict = {
-    # 수도권 광역 (ODsay 실측 코드)
-    114: "서해선", 116: "수인분당선",
-    22: "신분당선", 23: "경의중앙선",
-    101: "공항철도", 104: "경춘선",
-    107: "에버라인", 108: "의정부경전철",
-    110: "김포골드라인", 112: "신림선",
-    # 혹시 이전 코드 버전 대비 fallback
-    21: "수인분당선", 109: "서해선",
+    # 수도권 광역
+    22: "신분당",          # 확인: OSM ref="신분당" (종래 "신분당선" 불일치 수정)
+    23: "경의중앙",        # 패턴: "경의중앙선"→"경의중앙"
+    101: "공항철도",       # 확인: ref="공항철도" (AREX는 alt로 포함)
+    104: "경춘",           # 확인: ref="경춘"
+    107: "에버라인",
+    108: "의정부경전철",
+    110: "김포골드라인",
+    112: "신림선",
+    114: "서해",           # 패턴: "서해선"→"서해"
+    116: "수인분당",       # 패턴: "수인분당선"→"수인분당" (분당/수인 alt 포함)
+    # fallback 코드
+    21: "수인분당", 109: "서해",
     # 인천
-    100: "인천 1호선", 102: "인천 2호선",
+    100: "I1",             # 확인: 인천1호선 ref="I1" 패턴
+    102: "I2",             # 확인: 인천2호선 ref="I2"
     # 부산
     71: "1", 72: "2", 73: "3", 74: "4",
     # 대구
@@ -201,17 +212,65 @@ _SUBWAY_CODE_TO_OSM_REF: dict = {
     131: "1",
 }
 
-# OSM에 ref가 분리 저장된 노선 대체 ref 목록 (단일 쿼리로 union 검색)
+# OSM ref → 대체 ref 목록 (분리 운영 노선 or 복수 관계 대응)
 _ALT_OSM_REFS: dict = {
-    "수인분당선": ["수인분당선", "분당선", "수인선"],
-    "경의중앙선": ["경의중앙선", "경의선", "중앙선"],
-    "서해선":    ["서해선"],
+    "수인분당": ["수인분당", "분당", "수인"],   # 구 분당선/수인선 포함
+    "경의중앙": ["경의중앙", "경의", "중앙"],   # 구 경의선/중앙선 포함
+    "공항철도": ["공항철도", "AREX"],           # 일반열차+직통열차
+    "서해":     ["서해"],
+    "신분당":   ["신분당"],
+    "경춘":     ["경춘"],
 }
+
+# OSM ref → name= 필드 폴백 검색어 (regex, ref 매칭 0건일 때 2차 시도)
+_OSM_REF_TO_NAME_SEARCH: dict = {
+    "신분당":   "신분당선",
+    "경의중앙": "경의중앙선|경의선|중앙선",
+    "수인분당": "수인분당선|분당선|수인선",
+    "공항철도": "공항철도|AREX",
+    "경춘":     "경춘선",
+    "서해":     "서해선",
+    "에버라인": "에버라인",
+    "의정부경전철": "의정부경전철",
+    "김포골드라인": "김포골드라인",
+    "신림선":   "신림선",
+    "I1":       "인천.*1호|Incheon.*Line 1",
+    "I2":       "인천.*2호|Incheon.*Line 2",
+}
+
+
+def _build_osm_subway_query(ref: str, bbox: str) -> str:
+    """Overpass 쿼리 빌더 — 런타임과 프리캐싱 배치가 공용으로 사용.
+
+    1차: 매핑 테이블의 정확한 ref= 조건 (확인된 OSM 값)
+    2차: name~ 폴백 (같은 쿼리 union에 포함)
+    → 한글 ref 불일치 문제를 다단계로 흡수.
+    """
+    route_filter = 'route~"subway|railway|light_rail|train"'
+    refs = _ALT_OSM_REFS.get(ref, [ref])
+    name_term = _OSM_REF_TO_NAME_SEARCH.get(ref, ref)
+
+    parts: list[str] = []
+    # 1차: 정확한 ref 매칭
+    for r in refs:
+        parts.append(f'relation[type=route][{route_filter}][ref="{r}"]({bbox});')
+    # 2차: name~ 폴백 (1차와 union — 중복은 Overpass가 자동 제거)
+    parts.append(f'relation[type=route][{route_filter}]["name"~"{name_term}"]({bbox});')
+
+    return f'[out:json][timeout:25];({" ".join(parts)});way(r);out geom;'
 
 # ── 파일 캐시 (역 ID 쌍 → polyline coords) ────────────────────────
 _SUBWAY_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "subway_cache.json")
 _subway_file_cache: dict = {}   # "{sc}:{lo_id}:{hi_id}" → {"coords": [...], "lo_first": bool}
-_osm_subway_cache: dict = {}    # (ref, bbox) → assembled paths (메모리 한정)
+
+# ── 노선 단위 geometry 파일 캐시 (서버 재시작 후에도 OSM 재호출 없음) ────
+_OSM_LINE_GEO_PATH = os.path.join(os.path.dirname(__file__), "data", "osm_line_geo.json")
+_osm_line_geo_file: dict = {}   # ref(str) → assembled_paths([[lng,lat],...] 리스트)
+
+# ── OSM 메모리 캐시 (세션 내 빠른 공유) ───────────────────────────────
+_osm_subway_cache: dict = {}    # ref(str) → assembled paths — bbox 의존성 제거, 노선 단위 키
+_osm_empty_cache: dict = {}     # ref(str) → float timestamp — 빈 응답 임시 기록 (TTL 후 재시도)
+_OSM_EMPTY_TTL = 300.0          # 5분 후 재시도
 _overpass_semaphore: asyncio.Semaphore | None = None  # 동시 Overpass 요청 제한
 
 def _get_overpass_sem() -> asyncio.Semaphore:
@@ -241,6 +300,32 @@ def _save_subway_file_cache() -> None:
             json.dump(_subway_file_cache, f, ensure_ascii=False, separators=(",", ":"))
     except Exception as e:
         print(f"[SubwayCache] 저장 오류: {e}")
+
+
+def _load_osm_line_geo_cache() -> None:
+    """노선 단위 assembled geometry를 파일에서 메모리·파일 캐시로 로드."""
+    global _osm_line_geo_file
+    try:
+        with open(_OSM_LINE_GEO_PATH, encoding="utf-8") as f:
+            _osm_line_geo_file = json.load(f)
+        # 메모리 캐시(_osm_subway_cache)에도 올려 첫 요청부터 히트되도록 함
+        _osm_subway_cache.update(_osm_line_geo_file)
+        print(f"[LineGeoCache] {len(_osm_line_geo_file)}개 노선 geometry 로드 (OSM 재호출 없음)")
+    except FileNotFoundError:
+        _osm_line_geo_file = {}
+    except Exception as e:
+        print(f"[LineGeoCache] 로드 오류: {e}")
+        _osm_line_geo_file = {}
+
+
+def _save_osm_line_geo_cache() -> None:
+    """노선 단위 assembled geometry를 파일에 영속 저장."""
+    try:
+        os.makedirs(os.path.dirname(_OSM_LINE_GEO_PATH), exist_ok=True)
+        with open(_OSM_LINE_GEO_PATH, "w", encoding="utf-8") as f:
+            json.dump(_osm_line_geo_file, f, ensure_ascii=False, separators=(",", ":"))
+    except Exception as e:
+        print(f"[LineGeoCache] 저장 오류: {e}")
 
 
 def _cache_key(sc: int, id0: int, id1: int) -> str:
@@ -377,68 +462,127 @@ def slice_lane_coords(
     return seg
 
 
-async def _fetch_osm_paths(client: httpx.AsyncClient, subway_code: int, stations: list) -> list:
-    """주어진 노선·bbox의 OSM assembled paths 반환. 메모리 캐시 우선."""
-    lats = [float(s["y"]) for s in stations]
-    lngs = [float(s["x"]) for s in stations]
-    margin = 0.06
-    min_lat = round(min(lats) - margin, 2)
-    max_lat = round(max(lats) + margin, 2)
-    min_lng = round(min(lngs) - margin, 2)
-    max_lng = round(max(lngs) + margin, 2)
+async def _fetch_osm_paths(client: httpx.AsyncClient, subway_code: int) -> list:
+    """노선 전체 OSM assembled paths 반환.
 
+    cache_key = ref (노선 코드) — bbox 의존성 제거.
+    같은 노선을 타는 멤버들이 동일 키를 공유하므로,
+    첫 번째 멤버만 Overpass를 호출하고 나머지는 캐시 히트로 즉시 처리됨.
+
+    캐시 계층:
+      1. 메모리(_osm_subway_cache)  — 세션 내 가장 빠른 히트
+      2. 파일(_osm_line_geo_file)   — 서버 재시작 후에도 OSM 재호출 없음
+      3. Overpass API               — 완전 cold 일 때만 호출 (Semaphore(1) 보호)
+
+    fallback: 실패 시 [] 반환 → 호출자(_subway_polyline_from_cache)가 구간 직선으로 대체.
+    """
     ref = _SUBWAY_CODE_TO_OSM_REF.get(subway_code, str(subway_code))
-    cache_key = (ref, min_lat, min_lng, max_lat, max_lng)
+    cache_key = ref  # 노선 단위 단일 키 (bbox 무관)
 
-    # 실패 결과는 캐시하지 않음 (타임아웃/에러 시 다음 요청에서 재시도)
+    # 1. 메모리 캐시 (세션 내 — 세마포어 진입 전 빠른 경로)
     if cache_key in _osm_subway_cache:
+        print(f"[SubwayOSM] 메모리 캐시 히트 ref={ref}")
         return _osm_subway_cache[cache_key]
 
-    bbox = f"{min_lat},{min_lng},{max_lat},{max_lng}"
-    refs = _ALT_OSM_REFS.get(ref, [ref])
-    route_filter = 'route~"subway|railway|light_rail|train"'
+    # 2. 파일 캐시 (서버 재시작 후)
+    if cache_key in _osm_line_geo_file:
+        paths = _osm_line_geo_file[cache_key]
+        _osm_subway_cache[cache_key] = paths
+        print(f"[SubwayOSM] 파일 캐시 히트 ref={ref} ({len(paths)}경로) — OSM 호출 없음")
+        return paths
 
-    # ref 기반 + name 기반 union 쿼리 (한 번의 Overpass 호출로 모두 검색)
-    ref_parts = "".join(
-        f'relation[type=route][{route_filter}][ref="{r}"]({bbox});'
-        for r in refs
-    )
-    name_parts = "".join(
-        f'relation[type=route][{route_filter}]["name"~"{r}"]({bbox});'
-        for r in refs
-    )
-    query = f'[out:json][timeout:25];({ref_parts}{name_parts});way(r);out geom;'
+    # 빈 응답 TTL 캐시 확인 (Overpass 과부하로 빈 응답을 받은 경우)
+    if cache_key in _osm_empty_cache:
+        since = time.time() - _osm_empty_cache[cache_key]
+        if since < _OSM_EMPTY_TTL:
+            print(f"[SubwayOSM] 빈 응답 캐시 히트 ref={ref} ({since:.0f}s / {_OSM_EMPTY_TTL:.0f}s)")
+            return []
+        del _osm_empty_cache[cache_key]  # TTL 만료 → 재시도 허용
+
+    # 노선 전체를 한 번에 가져오기 위해 한국 전체 bbox 사용
+    # → 멤버별 탑승 구간이 달라도 동일 노선이면 같은 geometry를 공유
+    KOREA_BBOX = "33.0,124.0,38.5,131.5"
+    query = _build_osm_subway_query(ref, KOREA_BBOX)
 
     _overpass_mirrors = [
         "https://overpass-api.de/api/interpreter",
         "https://overpass.kumi.systems/api/interpreter",
     ]
+    _retry_delays = [0.5, 1.0, 2.0]
 
-    # 동시 Overpass 요청을 직렬화해 rate-limit/타임아웃 방지
     async with _get_overpass_sem():
-        # 세마포어 대기 중 다른 코루틴이 이미 채웠을 수 있으므로 재확인
+        # 세마포어 대기 중 다른 태스크가 채웠을 수 있으므로 재확인
         if cache_key in _osm_subway_cache:
+            print(f"[SubwayOSM] 세마포어 대기 후 메모리 캐시 히트 ref={ref}")
             return _osm_subway_cache[cache_key]
+        if cache_key in _osm_line_geo_file:
+            paths = _osm_line_geo_file[cache_key]
+            _osm_subway_cache[cache_key] = paths
+            print(f"[SubwayOSM] 세마포어 대기 후 파일 캐시 히트 ref={ref}")
+            return paths
+        if cache_key in _osm_empty_cache:
+            since = time.time() - _osm_empty_cache[cache_key]
+            if since < _OSM_EMPTY_TTL:
+                return []
+            del _osm_empty_cache[cache_key]
 
-        for attempt, url in enumerate(_overpass_mirrors):
-            try:
-                resp = await client.get(
-                    url, params={"data": query},
-                    headers={"User-Agent": "MeetMidApp/1.0"},
-                    timeout=25.0,
-                )
-                resp.raise_for_status()
-                elems = resp.json().get("elements", [])
-                paths = _assemble_osm_ways(elems)
-                print(f"[SubwayOSM] ref={ref} bbox={bbox}: {len(elems)}개 way → {len(paths)}개 경로")
-                if paths:
-                    _osm_subway_cache[cache_key] = paths
-                return paths
-            except Exception as e:
-                print(f"[SubwayOSM] 실패(시도{attempt+1}, {ref}): {e}")
-                if attempt < len(_overpass_mirrors) - 1:
-                    await asyncio.sleep(1.0)
-    return []
+        for mirror_url in _overpass_mirrors:
+            mirror_name = mirror_url.split("/")[2]
+            for attempt in range(3):
+                if attempt > 0:
+                    wait = _retry_delays[attempt - 1]
+                    print(f"[SubwayOSM] {mirror_name} retry {attempt}/2, {wait:.1f}s 대기 (ref={ref})")
+                    await asyncio.sleep(wait)
+                t0 = time.time()
+                try:
+                    resp = await client.get(
+                        mirror_url, params={"data": query},
+                        headers={"User-Agent": "MeetMidApp/1.0"},
+                        timeout=25.0,
+                    )
+                    elapsed = (time.time() - t0) * 1000
+                    status = resp.status_code
+                    print(f"[SubwayOSM] {mirror_name} status={status} {elapsed:.0f}ms ref={ref}")
+
+                    if status == 429:
+                        if attempt < 2:
+                            continue
+                        print(f"[SubwayOSM] {mirror_name} 429 재시도 소진 → 다음 mirror 시도")
+                        break
+
+                    resp.raise_for_status()
+                    elems = resp.json().get("elements", [])
+                    paths = _assemble_osm_ways(elems)
+                    print(f"[SubwayOSM] {mirror_name} ref={ref}: {len(elems)}way → {len(paths)}경로")
+
+                    if paths:
+                        _osm_subway_cache[cache_key] = paths
+                        _osm_line_geo_file[cache_key] = paths
+                        _save_osm_line_geo_cache()
+                        return paths
+
+                    # 0way 원인 구분 로그
+                    if len(elems) == 0:
+                        print(f"[SubwayOSM] ⚠ 0 relation 매칭 ref={ref} — "
+                              f"매핑 테이블 문제일 수 있음. {_OSM_EMPTY_TTL:.0f}s TTL")
+                    else:
+                        print(f"[SubwayOSM] relation {len(elems)}개 발견됐으나 way 조립 0 — "
+                              f"해당 구간 OSM 미매핑. {_OSM_EMPTY_TTL:.0f}s TTL ref={ref}")
+
+                    _osm_empty_cache[cache_key] = time.time()
+                    return []
+
+                except Exception as e:
+                    elapsed = (time.time() - t0) * 1000
+                    print(f"[SubwayOSM] 오류 {type(e).__name__} {elapsed:.0f}ms "
+                          f"(mirror={mirror_name}, attempt={attempt+1}/3): {e}")
+                    if attempt < 2:
+                        continue
+                    print(f"[SubwayOSM] {mirror_name} 재시도 소진 → 다음 mirror 시도")
+                    break
+
+        print(f"[SubwayOSM] 모든 mirror 실패 ref={ref} — 다음 요청에서 재시도")
+        return []
 
 
 async def _subway_polyline_from_cache(
@@ -461,7 +605,7 @@ async def _subway_polyline_from_cache(
     )
 
     if missing:
-        all_paths = await _fetch_osm_paths(client, subway_code, stations)
+        all_paths = await _fetch_osm_paths(client, subway_code)
         cache_dirty = False
         if all_paths:
             for si in range(len(stations) - 1):
@@ -540,14 +684,21 @@ async def _car_polyline(client: httpx.AsyncClient,
 async def _transit_polyline(client: httpx.AsyncClient,
                             src_lat, src_lng, dst_lat, dst_lng) -> list:
     """대중교통 경로 polyline (하이브리드):
-    - 지하철(1): OSM Overpass 실노선 geometry (역별 매칭, fallback: 역좌표 직선)
+    - 지하철(1): OSM Overpass 실노선 geometry (fallback: 역좌표 직선)
     - 버스(2):   첫/마지막 정류장 사이를 _car_polyline으로 실도로 표시
-    - 도보(3):   역/정류장 좌표 순서 연결
+    - 도보(3):   구간 시작/끝 좌표 직선 연결
     반환: [[lng, lat], ...]
+
+    [fallback 정책]
+    - ODsay 자체 실패 → [] (호출자(_member_polyline)가 출발-도착 전체 직선으로 대체)
+    - 특정 subPath geometry 실패 → 그 구간만 시작→끝 직선, 나머지는 유지
+    즉 ODsay가 subPath를 반환한 이상, 출발-도착 전체 직선은 나오지 않는다.
     """
     odsay_key = os.getenv("ODSAY_API_KEY")
     if not odsay_key:
         return []
+
+    # ── ODsay 경로 탐색 — 실패 시에만 [] 반환 (전체 직선 허용) ─────────
     try:
         resp = await client.get(
             "https://api.odsay.com/v1/api/searchPubTransPathT",
@@ -563,68 +714,80 @@ async def _transit_polyline(client: httpx.AsyncClient,
         paths = result.get("path", [])
         if not paths:
             return []
-
         sub_paths = paths[0].get("subPath", [])
+    except Exception as e:
+        print(f"[TransitPolyline] ODsay 실패 → 전체 직선 fallback: {e}")
+        return []
 
-        # 버스(2)/지하철(1) 구간 병렬 처리
-        async_indices: list = []
-        async_coros: list = []
-        for i, sub in enumerate(sub_paths):
-            stations = sub.get("passStopList", {}).get("stations", [])
-            tt = sub.get("trafficType")
-            if tt == 2 and len(stations) >= 2:  # 버스: 카카오 실도로
+    # ── 실노선/버스 geometry 병렬 조회 ───────────────────────────────
+    async_indices: list = []
+    async_coros: list = []
+    for i, sub in enumerate(sub_paths):
+        stations = sub.get("passStopList", {}).get("stations", [])
+        tt = sub.get("trafficType")
+        try:
+            if tt == 2 and len(stations) >= 2:
                 s_lat = float(stations[0]["y"]);  s_lng = float(stations[0]["x"])
                 e_lat = float(stations[-1]["y"]); e_lng = float(stations[-1]["x"])
                 async_indices.append((i, "bus"))
                 async_coros.append(_car_polyline(client, s_lat, s_lng, e_lat, e_lng))
-            elif tt == 1 and len(stations) >= 2:  # 지하철: OSM 실노선
+            elif tt == 1 and len(stations) >= 2:
                 lane = sub.get("lane", [{}])[0]
                 subway_code = lane.get("subwayCode", 0)
                 lane_name = lane.get("name") or lane.get("laneName") or ""
                 print(f"[Transit] 지하철 구간: code={subway_code}, name='{lane_name}', 역수={len(stations)}")
                 async_indices.append((i, "subway"))
                 async_coros.append(_subway_polyline_from_cache(client, stations, subway_code))
+        except Exception as e:
+            print(f"[TransitPolyline] subPath {i} 조회 준비 오류: {e}")
 
-        async_results = await asyncio.gather(*async_coros)
-        result_map = {idx: res for (idx, _), res in zip(async_indices, async_results)}
+    # return_exceptions=True: 구간 하나의 예외가 다른 멤버·구간 전체를 죽이지 않도록
+    async_results = await asyncio.gather(*async_coros, return_exceptions=True)
+    result_map = {
+        idx: (res if not isinstance(res, Exception) else [])
+        for (idx, _), res in zip(async_indices, async_results)
+    }
 
-        all_coords = []
-        for i, sub in enumerate(sub_paths):
-            tt = sub.get("trafficType")
-            stations = sub.get("passStopList", {}).get("stations", [])
-            # ODsay가 각 구간의 시작/끝 좌표를 제공
-            sx, sy = sub.get("startX"), sub.get("startY")
-            ex, ey = sub.get("endX"), sub.get("endY")
+    # ── subPath 조립 — 각 구간 실패는 구간 직선으로 대체 ──────────────
+    all_coords: list = []
+    for i, sub in enumerate(sub_paths):
+        tt = sub.get("trafficType")
+        sx, sy = sub.get("startX"), sub.get("startY")
+        ex, ey = sub.get("endX"), sub.get("endY")
 
+        def _sub_fallback(sx=sx, sy=sy, ex=ex, ey=ey) -> list:
+            """이 subPath의 시작→끝 직선 (구간 단위 최소 fallback)."""
+            pts = []
+            if sx and sy:
+                pts.append([float(sx), float(sy)])
+            if ex and ey:
+                pts.append([float(ex), float(ey)])
+            return pts
+
+        try:
             if tt in (1, 2):
                 coords = result_map.get(i, [])
                 if coords:
                     all_coords.extend(coords)
                     continue
-                # fallback: passStopList 역/정류장 좌표 순서 연결
+                # geometry 없음 → stations 좌표 순서 연결
+                stations = sub.get("passStopList", {}).get("stations", [])
                 if stations:
                     for st in stations:
                         x, y = st.get("x"), st.get("y")
                         if x is not None and y is not None:
                             all_coords.append([float(x), float(y)])
                     continue
-                # stations도 없으면 구간 시작/끝 직선
-                if sx and sy:
-                    all_coords.append([float(sx), float(sy)])
-                if ex and ey:
-                    all_coords.append([float(ex), float(ey)])
+                # stations도 없음 → 구간 직선
+                all_coords.extend(_sub_fallback())
             else:
-                # 도보(tt=3): passStopList.stations가 비어있는 경우가 많음
-                # → ODsay가 제공하는 구간 시작/끝 좌표로 직선 연결
-                if sx and sy:
-                    all_coords.append([float(sx), float(sy)])
-                if ex and ey:
-                    all_coords.append([float(ex), float(ey)])
+                # 도보(tt=3) → 구간 직선
+                all_coords.extend(_sub_fallback())
+        except Exception as e:
+            print(f"[TransitPolyline] subPath {i}(tt={tt}) 조립 오류 → 구간 직선 대체: {e}")
+            all_coords.extend(_sub_fallback())
 
-        return all_coords
-    except Exception as e:
-        print(f"[TransitPolyline] {e}")
-        return []
+    return all_coords
 
 
 async def _member_polyline(client: httpx.AsyncClient,
@@ -1259,39 +1422,119 @@ async def _route_distance_fair_midpoint(
     return cx, cy, dist_map
 
 
-async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter: int = 6) -> tuple:
-    n = len(members)
-    cx = sum(m["lat"] for m in members) / n
-    cy = sum(m["lng"] for m in members) / n
-    time_map = {}
-    step = 0.4
+_FAIR_SPEED   = {"car": 1.5, "transit": 1.0}   # 교통수단 상대 속도
+_FAIR_P_LIST  = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]  # 가중 지수 후보 (최대 6)
+_FAIR_LAMBDA  = 0.7                               # 편차 가중치 (cost = mean + λ·spread)
+_FAIR_DEDUP   = 1e-5                              # 후보 중복 판단 임계값(도 단위, ~1m)
 
-    for it in range(max_iter):
-        # 모든 멤버 이동시간 병렬 계산
+
+async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter: int = 6) -> tuple:
+    """시간 공평 — 교통수단 속도 가중 중심점 후보 평가 방식.
+
+    [핵심 설계]
+    각 후보 center_p를 평가하기 전에 가장 가까운 역으로 스냅.
+    대중교통 이동시간은 역 위치에 따라 계단식으로 달라지므로,
+    평가도 "실제 모일 역"에서 수행해야 최적화 결과 ≡ 화면 표시 일치.
+
+    반환: (snap_lat, snap_lng, time_map, station_name)
+    - snap_lat/lng: 알고리즘이 선택한 역 좌표 (그대로 화면에 표시)
+    - time_map: 해당 역에서 계산된 이동시간 (화면 표시값과 동일)
+    - station_name: 역 이름 (mid_address로 사용)
+
+    [API 호출]
+    후보당: _find_nearby_landmark(~2 Kakao calls) + n회 travel_time = n+2 calls
+    총 최대 6×(n+2). 기존 6n 대비 +12 Kakao lightweight calls.
+    """
+    n = len(members)
+
+    # ── 1단계: 후보 좌표 생성 (API 없음) ──────────────────────────────
+    candidates: list[tuple[float, float, float]] = []  # (lat, lng, p)
+    seen: list[tuple[float, float]] = []
+
+    for p in _FAIR_P_LIST:
+        weights = [(1.0 / _FAIR_SPEED.get(m.get("transport", "transit"), 1.0)) ** p
+                   for m in members]
+        w_sum = sum(weights)
+        clat = sum(w * m["lat"] for w, m in zip(weights, members)) / w_sum
+        clng = sum(w * m["lng"] for w, m in zip(weights, members)) / w_sum
+
+        dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                  for s in seen)
+        if not dup:
+            candidates.append((clat, clng, p))
+            seen.append((clat, clng))
+
+    candidates = candidates[:max_iter]
+
+    # ── 2단계: 각 후보 → 역 스냅 → 스냅된 역에서 평가 ────────────────
+    best_lat, best_lng = candidates[0][0], candidates[0][1]
+    best_cost = float("inf")
+    best_time_map: dict = {}
+    best_station_name: str | None = None
+
+    for clat, clng, p in candidates:
+        # 가장 가까운 역으로 스냅 (평가도 실제 모일 지점에서)
+        station = await _find_nearby_landmark(client, clat, clng)
+        if station:
+            eval_lat = station["lat"]
+            eval_lng = station["lng"]
+            eval_name = station["name"]
+        else:
+            eval_lat, eval_lng = clat, clng
+            eval_name = None
+
         times = await asyncio.gather(*[
-            _travel_minutes(client, m["lat"], m["lng"], cx, cy, m["transport"])
+            _travel_minutes(client, m["lat"], m["lng"], eval_lat, eval_lng, m["transport"])
             for m in members
         ])
         time_map = {m["name"]: t for m, t in zip(members, times)}
 
-        slowest = None
-        slowest_t = -1
-        fastest_t = float("inf")
-        for m, t in zip(members, times):
-            if t > slowest_t:
-                slowest_t = t
-                slowest = m
-            if t < fastest_t:
-                fastest_t = t
+        mean_t = sum(times) / n
+        spread = max(times) - min(times)
+        cost   = mean_t + _FAIR_LAMBDA * spread
 
-        if slowest is None or slowest_t - fastest_t <= 2 or it == max_iter - 1:
+        names_str = ", ".join(f"{m['name']}{t:.0f}" for m, t in zip(members, times))
+        print(f"[Fair] p={p:.1f}  snap={eval_name or '미스냅'}  "
+              f"mean={mean_t:.1f}  spread={spread:.1f}  cost={cost:.1f}  t=[{names_str}]")
+
+        # 이상치 경고
+        sorted_t = sorted(times)
+        mid = n // 2
+        median_t = sorted_t[mid] if n % 2 == 1 else (sorted_t[mid-1] + sorted_t[mid]) / 2.0
+        for m, t in zip(members, times):
+            if median_t > 0 and t > 2.5 * median_t:
+                print(f"[WARN] 라우팅 이상치 의심: {m['name']} {t:.0f}분 snap={eval_name}")
+
+        if spread <= 2.0:
+            best_lat, best_lng = eval_lat, eval_lng
+            best_cost = cost
+            best_time_map = time_map
+            best_station_name = eval_name
+            print(f"[Fair] spread≤2분 → 조기 채택 p={p:.1f} snap={eval_name}")
             break
 
-        cx += (slowest["lat"] - cx) * step
-        cy += (slowest["lng"] - cy) * step
-        step *= 0.7
+        if cost < best_cost:
+            best_cost = cost
+            best_lat, best_lng = eval_lat, eval_lng
+            best_time_map = time_map
+            best_station_name = eval_name
 
-    return cx, cy, time_map
+    # ── 채택 후보 자동차 경고 ────────────────────────────────────────
+    car_times     = [best_time_map[m["name"]] for m in members
+                     if m.get("transport") == "car"]
+    transit_times = [best_time_map[m["name"]] for m in members
+                     if m.get("transport") != "car"]
+    if car_times and transit_times:
+        avg_transit = sum(transit_times) / len(transit_times)
+        for m in members:
+            if m.get("transport") == "car" and best_time_map[m["name"]] > avg_transit:
+                print(f"[WARN] 자동차가 더 느림 ({m['name']} "
+                      f"{best_time_map[m['name']]:.0f}분 > 대중교통 평균 {avg_transit:.0f}분)")
+
+    t_str = ", ".join(f"{k}{v:.0f}" for k, v in best_time_map.items())
+    print(f"[Fair] 최종 채택: snap={best_station_name}  cost={best_cost:.1f}  t=[{t_str}]")
+    # 4-tuple: 화면 표시값(역 좌표·역명·이동시간)을 모두 포함 — get_midpoint가 그대로 사용
+    return best_lat, best_lng, best_time_map, best_station_name
 
 
 # ── Supabase REST 헬퍼 (비동기) ───────────────────────────────────
@@ -1471,6 +1714,7 @@ class UpdateRoomPromptRequest(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _load_subway_file_cache()
+    _load_osm_line_geo_cache()
     _load_gemini_cache()
     async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
         app.state.client = client
@@ -2113,24 +2357,44 @@ async def get_midpoint(room_id: str, request: Request,
             mid_address = None
         else:
             if criteria == "timeFair" and len(located) >= 2:
-                mid_lat, mid_lng, time_map = await _time_fair_midpoint(client, located)
+                # _time_fair_midpoint가 내부에서 역 스냅까지 완료해 반환.
+                # 추가 landmark snap 없이 그대로 사용 → 로그·화면 100% 일치.
+                mid_lat, mid_lng, time_map, snap_name = await _time_fair_midpoint(client, located)
+                mid_address = snap_name  # 알고리즘이 선택한 역 이름
+                # ── 진단 로그: 최적화 결과 vs 화면 표시 일치 확인 ──
+                algo_t = ", ".join(f"{k}{v:.0f}" for k, v in time_map.items())
+                print(f"[Fair] 화면 표시 center=({mid_lat:.5f},{mid_lng:.5f})"
+                      f"  역={mid_address}  t=[{algo_t}]")
+                print(f"[Fair] ✓ 최적화 좌표 = 표시 좌표 (스냅 일치, 시간 폭발 없음)")
             elif criteria == "distanceFair" and len(located) >= 2:
                 mid_lat, mid_lng, _ = await _route_distance_fair_midpoint(client, located)
+                # 랜드마크 스냅
+                landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
+                if landmark:
+                    mid_lat = landmark["lat"]
+                    mid_lng = landmark["lng"]
+                    mid_address = landmark["name"]
+                else:
+                    mid_address = None
             elif criteria in ("majority", "transitFocused") and len(located) >= 2:
                 mid_lat, mid_lng = await _majority_midpoint(client, located)
+                landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
+                if landmark:
+                    mid_lat = landmark["lat"]
+                    mid_lng = landmark["lng"]
+                    mid_address = landmark["name"]
+                else:
+                    mid_address = None
             else:
                 mid_lat = sum(m["lat"] for m in located) / len(located)
                 mid_lng = sum(m["lng"] for m in located) / len(located)
-
-            # 랜드마크 검색 → 찾으면 좌표를 중간지점으로 스냅
-            landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
-            if landmark:
-                mid_lat = landmark["lat"]
-                mid_lng = landmark["lng"]
-                mid_address = landmark["name"]
-                time_map = {}  # 랜드마크 좌표 기준으로 재계산
-            else:
-                mid_address = None
+                landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
+                if landmark:
+                    mid_lat = landmark["lat"]
+                    mid_lng = landmark["lng"]
+                    mid_address = landmark["name"]
+                else:
+                    mid_address = None
 
             # 프롬프트가 있으면 Gemini로 근처 장소 탐색 → 최종 목적지 대체
             prompt = prompt.strip()
