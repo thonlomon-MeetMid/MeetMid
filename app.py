@@ -89,7 +89,7 @@ def _build_clusters(members: list, cluster_radius_km: float) -> list:
 async def _majority_midpoint(
     client: httpx.AsyncClient,
     members: list,
-    cluster_radius_km: float = 8.0,
+    cluster_radius_km: float = 5.0,
     max_iter: int = 6,
 ) -> tuple:
     """다수결(그룹 가중 시간 공평).
