@@ -1488,7 +1488,8 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
 
     # ── 2단계: 각 후보 → 역 스냅 → 스냅된 역에서 평가 ────────────────
     best_lat, best_lng = candidates[0][0], candidates[0][1]
-    best_cost = float("inf")
+    best_spread = float("inf")
+    best_mean   = float("inf")
     best_time_map: dict = {}
     best_station_name: str | None = None
 
@@ -1511,12 +1512,11 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
 
         mean_t = sum(times) / n
         spread = max(times) - min(times)
-        cost   = mean_t + _FAIR_LAMBDA * spread
 
         names_str = ", ".join(f"{m['name']}{t:.0f}" for m, t in zip(members, times))
         p_label = f"p={p:.2f}" if p >= 0 else f"dir={abs(p):.2f}"
         print(f"[Fair] {p_label}  snap={eval_name or '미스냅'}  "
-              f"mean={mean_t:.1f}  spread={spread:.1f}  cost={cost:.1f}  t=[{names_str}]")
+              f"mean={mean_t:.1f}  spread={spread:.1f}  t=[{names_str}]")
 
         # 이상치 경고
         sorted_t = sorted(times)
@@ -1528,14 +1528,17 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
 
         if spread <= 2.0:
             best_lat, best_lng = eval_lat, eval_lng
-            best_cost = cost
+            best_spread = spread
+            best_mean   = mean_t
             best_time_map = time_map
             best_station_name = eval_name
-            print(f"[Fair] spread≤2분 → 조기 채택 p={p:.1f} snap={eval_name}")
+            print(f"[Fair] spread≤2분 → 조기 채택 snap={eval_name}")
             break
 
-        if cost < best_cost:
-            best_cost = cost
+        # spread 최소 우선, 동률이면 mean 최소로 tie-break
+        if (spread, mean_t) < (best_spread, best_mean):
+            best_spread = spread
+            best_mean   = mean_t
             best_lat, best_lng = eval_lat, eval_lng
             best_time_map = time_map
             best_station_name = eval_name
@@ -1553,7 +1556,7 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
                       f"{best_time_map[m['name']]:.0f}분 > 대중교통 평균 {avg_transit:.0f}분)")
 
     t_str = ", ".join(f"{k}{v:.0f}" for k, v in best_time_map.items())
-    print(f"[Fair] 최종 채택: snap={best_station_name}  cost={best_cost:.1f}  t=[{t_str}]")
+    print(f"[Fair] 최종 채택: snap={best_station_name}  spread={best_spread:.1f}  mean={best_mean:.1f}  t=[{t_str}]")
     # 4-tuple: 화면 표시값(역 좌표·역명·이동시간)을 모두 포함 — get_midpoint가 그대로 사용
     return best_lat, best_lng, best_time_map, best_station_name
 
