@@ -107,16 +107,19 @@ async def _majority_midpoint(
         )
 
     # 1) 거리 공평 (실경로) 기준점
-    fair_lat, fair_lng, _ = await _route_distance_fair_midpoint(client, members)
+    fair_lat, fair_lng, dist_map = await _route_distance_fair_midpoint(client, members)
+    dist_str = ", ".join(f"{k}{v:.1f}km" for k, v in dist_map.items())
+    print(f"[Majority] 거리공평 anchor=({fair_lat:.5f},{fair_lng:.5f})  dist=[{dist_str}]")
 
     # 2) 다수(인원 가중 클러스터) 중심
     maj_lat, maj_lng = _cluster_centroid(members, cluster_radius_km)
+    print(f"[Majority] 클러스터 centroid=({maj_lat:.5f},{maj_lng:.5f})")
 
     # 3) 블렌딩: 거리 공평 → 다수 방향으로 bias 비율만큼 이동
-    return (
-        fair_lat * (1 - bias) + maj_lat * bias,
-        fair_lng * (1 - bias) + maj_lng * bias,
-    )
+    blended_lat = fair_lat * (1 - bias) + maj_lat * bias
+    blended_lng = fair_lng * (1 - bias) + maj_lng * bias
+    print(f"[Majority] 블렌딩(bias={bias}) → ({blended_lat:.5f},{blended_lng:.5f})")
+    return blended_lat, blended_lng
 
 
 # ── 비동기 외부 API 호출 ──────────────────────────────────────────
