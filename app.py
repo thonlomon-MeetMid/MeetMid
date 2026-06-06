@@ -60,66 +60,145 @@ def _fair_midpoint(points: list, max_iter: int = 200) -> tuple:
     return cx, cy
 
 
-def _cluster_centroid(members: list, cluster_radius_km: float = 5.0) -> tuple:
-    """멤버들을 반경 내 클러스터로 묶고 인원수 가중 평균 좌표 반환."""
+def _build_clusters(members: list, cluster_radius_km: float) -> list:
+    """멤버를 거리 기반으로 클러스터링.
+    반환: [{"members": [...], "size": int, "lat": float, "lng": float}, ...]
+    """
     clusters = []
     assigned = [False] * len(members)
     for i, m in enumerate(members):
         if assigned[i]:
             continue
-        cluster_lats = [m["lat"]]
-        cluster_lngs = [m["lng"]]
+        group = [m]
         assigned[i] = True
         for j, other in enumerate(members):
             if assigned[j]:
                 continue
             if _haversine_km(m["lat"], m["lng"], other["lat"], other["lng"]) <= cluster_radius_km:
-                cluster_lats.append(other["lat"])
-                cluster_lngs.append(other["lng"])
+                group.append(other)
                 assigned[j] = True
         clusters.append({
-            "lat": sum(cluster_lats) / len(cluster_lats),
-            "lng": sum(cluster_lngs) / len(cluster_lngs),
-            "weight": len(cluster_lats),
+            "members": group,
+            "size": len(group),
+            "lat": sum(gm["lat"] for gm in group) / len(group),
+            "lng": sum(gm["lng"] for gm in group) / len(group),
         })
-    total_w = sum(c["weight"] for c in clusters)
-    return (
-        sum(c["lat"] * c["weight"] for c in clusters) / total_w,
-        sum(c["lng"] * c["weight"] for c in clusters) / total_w,
-    )
+    return clusters
 
 
 async def _majority_midpoint(
     client: httpx.AsyncClient,
     members: list,
-    cluster_radius_km: float = 5.0,
-    bias: float = 0.4,
+    cluster_radius_km: float = 8.0,
+    max_iter: int = 6,
 ) -> tuple:
-    """다수결: 거리 공평(실경로) 결과를 앵커로 하고, 다수 클러스터 중심 쪽으로 bias 만큼 치우침.
-    bias=0 이면 순수 거리 공평, bias=1 이면 순수 클러스터 가중 평균.
+    """다수결(그룹 가중 시간 공평).
+
+    목표: 그룹별 (평균이동시간 × 그룹인원) 이 모든 그룹에서 동일해지는 역 탐색.
+    → 2명 그룹은 1명 개인보다 절반만큼 덜 이동함.
+      예) 2:1:1 → 20분·20분 / 40분 / 40분
+
+    평가 지표: max(그룹_합계시간) - min(그룹_합계시간) 최소화
+               (그룹_합계시간 = 그룹평균 × 인원 = 그룹 내 개인 시간 합)
+    후보 생성·스냅 구조: _time_fair_midpoint 와 동일 (6회 한도).
+    반환: (lat, lng, time_map, station_name)
     """
-    if len(members) == 1:
-        return members[0]["lat"], members[0]["lng"]
-    if len(members) == 2:
-        return (
-            (members[0]["lat"] + members[1]["lat"]) / 2,
-            (members[0]["lng"] + members[1]["lng"]) / 2,
+    n = len(members)
+
+    # ── 0단계: 클러스터 구성 ──────────────────────────────────────────
+    clusters = _build_clusters(members, cluster_radius_km)
+    c_str = "  ".join(
+        f"[{'+'.join(m['name'] for m in c['members'])}]×{c['size']}"
+        for c in clusters
+    )
+    print(f"[Majority] 클러스터(반경{cluster_radius_km}km): {c_str}")
+
+    # ── 1단계: 후보 좌표 생성 (timeFair 와 동일) ─────────────────────
+    candidates: list[tuple[float, float, float]] = []
+    seen: list[tuple[float, float]] = []
+
+    for p in _FAIR_P_LIST:
+        weights = [(1.0 / _FAIR_SPEED.get(m.get("transport", "transit"), 1.0)) ** p
+                   for m in members]
+        w_sum = sum(weights)
+        clat = sum(w * m["lat"] for w, m in zip(weights, members)) / w_sum
+        clng = sum(w * m["lng"] for w, m in zip(weights, members)) / w_sum
+        dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                  for s in seen)
+        if not dup:
+            candidates.append((clat, clng, p))
+            seen.append((clat, clng))
+
+    if len(candidates) < max_iter:
+        base_lat = candidates[0][0] if candidates else sum(m["lat"] for m in members) / n
+        base_lng = candidates[0][1] if candidates else sum(m["lng"] for m in members) / n
+        for alpha in [0.25, 0.45]:
+            for m in members:
+                if len(candidates) >= max_iter:
+                    break
+                clat = base_lat * (1 - alpha) + m["lat"] * alpha
+                clng = base_lng * (1 - alpha) + m["lng"] * alpha
+                dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                          for s in seen)
+                if not dup:
+                    candidates.append((clat, clng, -alpha))
+                    seen.append((clat, clng))
+            if len(candidates) >= max_iter:
+                break
+
+    candidates = candidates[:max_iter]
+
+    # ── 2단계: 각 후보 → 역 스냅 → 그룹 가중 spread 평가 ────────────
+    best_lat, best_lng = candidates[0][0], candidates[0][1]
+    best_spread = float("inf")
+    best_mean   = float("inf")
+    best_time_map: dict = {}
+    best_station_name: str | None = None
+
+    for clat, clng, p in candidates:
+        station = await _find_nearby_landmark(client, clat, clng)
+        eval_lat = station["lat"] if station else clat
+        eval_lng = station["lng"] if station else clng
+        eval_name = station["name"] if station else None
+
+        times = await asyncio.gather(*[
+            _travel_minutes(client, m["lat"], m["lng"], eval_lat, eval_lng, m["transport"])
+            for m in members
+        ])
+        time_map = {m["name"]: t for m, t in zip(members, times)}
+
+        # 그룹 합계 시간 = 그룹_평균 × 인원 = 그룹 내 개인 시간의 합
+        group_totals = [
+            sum(time_map[m["name"]] for m in c["members"])
+            for c in clusters
+        ]
+        spread = max(group_totals) - min(group_totals)
+        mean_t = sum(times) / n
+
+        p_label = f"p={p:.2f}" if p >= 0 else f"dir={abs(p):.2f}"
+        gt_str = "  ".join(
+            f"[{'+'.join(m['name'] for m in c['members'])}]={gt:.0f}"
+            for c, gt in zip(clusters, group_totals)
         )
+        names_str = ", ".join(f"{m['name']}{time_map[m['name']]:.0f}" for m in members)
+        print(f"[Majority] {p_label}  snap={eval_name or '미스냅'}  "
+              f"g_spread={spread:.1f}  g=[{gt_str}]  t=[{names_str}]")
 
-    # 1) 거리 공평 (실경로) 기준점
-    fair_lat, fair_lng, dist_map = await _route_distance_fair_midpoint(client, members)
-    dist_str = ", ".join(f"{k}{v:.1f}km" for k, v in dist_map.items())
-    print(f"[Majority] 거리공평 anchor=({fair_lat:.5f},{fair_lng:.5f})  dist=[{dist_str}]")
+        if spread <= 2.0:
+            best_lat, best_lng = eval_lat, eval_lng
+            best_spread, best_mean = spread, mean_t
+            best_time_map, best_station_name = time_map, eval_name
+            print(f"[Majority] g_spread≤2 → 조기 채택 snap={eval_name}")
+            break
 
-    # 2) 다수(인원 가중 클러스터) 중심
-    maj_lat, maj_lng = _cluster_centroid(members, cluster_radius_km)
-    print(f"[Majority] 클러스터 centroid=({maj_lat:.5f},{maj_lng:.5f})")
+        if (spread, mean_t) < (best_spread, best_mean):
+            best_spread, best_mean = spread, mean_t
+            best_lat, best_lng = eval_lat, eval_lng
+            best_time_map, best_station_name = time_map, eval_name
 
-    # 3) 블렌딩: 거리 공평 → 다수 방향으로 bias 비율만큼 이동
-    blended_lat = fair_lat * (1 - bias) + maj_lat * bias
-    blended_lng = fair_lng * (1 - bias) + maj_lng * bias
-    print(f"[Majority] 블렌딩(bias={bias}) → ({blended_lat:.5f},{blended_lng:.5f})")
-    return blended_lat, blended_lng
+    t_str = ", ".join(f"{k}{v:.0f}" for k, v in best_time_map.items())
+    print(f"[Majority] 최종 채택: snap={best_station_name}  g_spread={best_spread:.1f}  t=[{t_str}]")
+    return best_lat, best_lng, best_time_map, best_station_name
 
 
 # ── 비동기 외부 API 호출 ──────────────────────────────────────────
@@ -2404,14 +2483,8 @@ async def get_midpoint(room_id: str, request: Request,
                 else:
                     mid_address = None
             elif criteria in ("majority", "transitFocused") and len(located) >= 2:
-                mid_lat, mid_lng = await _majority_midpoint(client, located)
-                landmark = await _find_nearby_landmark(client, mid_lat, mid_lng)
-                if landmark:
-                    mid_lat = landmark["lat"]
-                    mid_lng = landmark["lng"]
-                    mid_address = landmark["name"]
-                else:
-                    mid_address = None
+                mid_lat, mid_lng, time_map, snap_name = await _majority_midpoint(client, located)
+                mid_address = snap_name
             else:
                 mid_lat = sum(m["lat"] for m in located) / len(located)
                 mid_lng = sum(m["lng"] for m in located) / len(located)
