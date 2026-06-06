@@ -1464,6 +1464,26 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
             candidates.append((clat, clng, p))
             seen.append((clat, clng))
 
+    # 동일 교통수단 등 degenerate 보정: 후보가 max_iter에 못 미치면
+    # 중심 → 각 멤버 방향으로 이동한 지점을 추가 후보로 보충.
+    # 교통수단이 같으면 p 변화가 가중치에 영향을 주지 않아 후보가 1개로 줄기 때문.
+    if len(candidates) < max_iter:
+        base_lat = candidates[0][0] if candidates else sum(m["lat"] for m in members) / n
+        base_lng = candidates[0][1] if candidates else sum(m["lng"] for m in members) / n
+        for alpha in [0.25, 0.45]:                  # 2개 거리 단계로 최대 2n개 추가
+            for m in members:
+                if len(candidates) >= max_iter:
+                    break
+                clat = base_lat * (1 - alpha) + m["lat"] * alpha
+                clng = base_lng * (1 - alpha) + m["lng"] * alpha
+                dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                          for s in seen)
+                if not dup:
+                    candidates.append((clat, clng, -alpha))   # p 자리에 -alpha 로 구분
+                    seen.append((clat, clng))
+            if len(candidates) >= max_iter:
+                break
+
     candidates = candidates[:max_iter]
 
     # ── 2단계: 각 후보 → 역 스냅 → 스냅된 역에서 평가 ────────────────
@@ -1494,7 +1514,8 @@ async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter
         cost   = mean_t + _FAIR_LAMBDA * spread
 
         names_str = ", ".join(f"{m['name']}{t:.0f}" for m, t in zip(members, times))
-        print(f"[Fair] p={p:.1f}  snap={eval_name or '미스냅'}  "
+        p_label = f"p={p:.2f}" if p >= 0 else f"dir={abs(p):.2f}"
+        print(f"[Fair] {p_label}  snap={eval_name or '미스냅'}  "
               f"mean={mean_t:.1f}  spread={spread:.1f}  cost={cost:.1f}  t=[{names_str}]")
 
         # 이상치 경고
