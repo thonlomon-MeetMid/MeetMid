@@ -1504,143 +1504,162 @@ async def _route_distance_fair_midpoint(
     return cx, cy, dist_map
 
 
-_FAIR_SPEED   = {"car": 1.5, "transit": 1.0}   # 교통수단 상대 속도
-_FAIR_P_LIST  = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]  # 가중 지수 후보 (최대 6)
-_FAIR_LAMBDA  = 0.7                               # 편차 가중치 (cost = mean + λ·spread)
-_FAIR_DEDUP   = 1e-5                              # 후보 중복 판단 임계값(도 단위, ~1m)
+_FAIR_SPEED        = {"car": 1.5, "transit": 1.0}   # 교통수단 상대 속도
+_FAIR_P_LIST       = [0.0, 0.5, 1.0, 1.5, 2.0, 2.5]  # 가중 지수 후보 (최대 6)
+_FAIR_DEDUP        = 1e-5                              # 후보 중복 판단 임계값(도 단위, ~1m)
+_FAIR_DESCENT_STEP = 0.4                               # descent 초기 step (튜닝용)
 
 
 async def _time_fair_midpoint(client: httpx.AsyncClient, members: list, max_iter: int = 6) -> tuple:
-    """시간 공평 — 교통수단 속도 가중 중심점 후보 평가 방식.
+    """시간 공평 — 시드 선정 후 방향성 descent 방식.
 
-    [핵심 설계]
-    각 후보 center_p를 평가하기 전에 가장 가까운 역으로 스냅.
-    대중교통 이동시간은 역 위치에 따라 계단식으로 달라지므로,
-    평가도 "실제 모일 역"에서 수행해야 최적화 결과 ≡ 화면 표시 일치.
+    [시드] 혼합 교통수단일 때만 실행: p sweep weighted centroid → 스냅 평가
+           → spread 최소 시드의 raw 좌표를 descent 시작점으로 선정.
+           단일 교통수단이면 지리적 centroid를 바로 시작점으로 사용.
+    [descent] 시작점에서 가장 느린 멤버 방향으로 step만큼 이동, 최대 6회 스냅 평가.
+    [최종] descent 후보 중 spread 최소 채택.
 
     반환: (snap_lat, snap_lng, time_map, station_name)
-    - snap_lat/lng: 알고리즘이 선택한 역 좌표 (그대로 화면에 표시)
-    - time_map: 해당 역에서 계산된 이동시간 (화면 표시값과 동일)
-    - station_name: 역 이름 (mid_address로 사용)
 
     [API 호출]
-    후보당: _find_nearby_landmark(~2 Kakao calls) + n회 travel_time = n+2 calls
-    총 최대 6×(n+2). 기존 6n 대비 +12 Kakao lightweight calls.
+    혼합: 시드 최대 6×(n+2) + descent 최대 6×(n+2) = 최대 12×(n+2)
+    단일: descent 최대 6×(n+2) 만
     """
     n = len(members)
+    transports = {m.get("transport", "transit") for m in members}
+    has_mixed = len(transports) > 1
 
-    # ── 1단계: 후보 좌표 생성 (API 없음) ──────────────────────────────
-    candidates: list[tuple[float, float, float]] = []  # (lat, lng, p)
-    seen: list[tuple[float, float]] = []
+    # ── 시드 단계: 혼합 교통수단일 때만 ────────────────────────────────
+    if has_mixed:
+        seed_candidates: list[tuple[float, float, float]] = []  # (lat, lng, p_or_alpha)
+        seen: list[tuple[float, float]] = []
 
-    for p in _FAIR_P_LIST:
-        weights = [(1.0 / _FAIR_SPEED.get(m.get("transport", "transit"), 1.0)) ** p
-                   for m in members]
-        w_sum = sum(weights)
-        clat = sum(w * m["lat"] for w, m in zip(weights, members)) / w_sum
-        clng = sum(w * m["lng"] for w, m in zip(weights, members)) / w_sum
+        for p in _FAIR_P_LIST:
+            weights = [(1.0 / _FAIR_SPEED.get(m.get("transport", "transit"), 1.0)) ** p
+                       for m in members]
+            w_sum = sum(weights)
+            clat = sum(w * m["lat"] for w, m in zip(weights, members)) / w_sum
+            clng = sum(w * m["lng"] for w, m in zip(weights, members)) / w_sum
+            dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                      for s in seen)
+            if not dup:
+                seed_candidates.append((clat, clng, p))
+                seen.append((clat, clng))
 
-        dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
-                  for s in seen)
-        if not dup:
-            candidates.append((clat, clng, p))
-            seen.append((clat, clng))
-
-    # 동일 교통수단 등 degenerate 보정: 후보가 max_iter에 못 미치면
-    # 중심 → 각 멤버 방향으로 이동한 지점을 추가 후보로 보충.
-    # 교통수단이 같으면 p 변화가 가중치에 영향을 주지 않아 후보가 1개로 줄기 때문.
-    if len(candidates) < max_iter:
-        base_lat = candidates[0][0] if candidates else sum(m["lat"] for m in members) / n
-        base_lng = candidates[0][1] if candidates else sum(m["lng"] for m in members) / n
-        for alpha in [0.25, 0.45]:                  # 2개 거리 단계로 최대 2n개 추가
-            for m in members:
-                if len(candidates) >= max_iter:
+        # degenerate 보정
+        if len(seed_candidates) < max_iter:
+            base_lat = seed_candidates[0][0] if seed_candidates else sum(m["lat"] for m in members) / n
+            base_lng = seed_candidates[0][1] if seed_candidates else sum(m["lng"] for m in members) / n
+            for alpha in [0.25, 0.45]:
+                for m in members:
+                    if len(seed_candidates) >= max_iter:
+                        break
+                    clat = base_lat * (1 - alpha) + m["lat"] * alpha
+                    clng = base_lng * (1 - alpha) + m["lng"] * alpha
+                    dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
+                              for s in seen)
+                    if not dup:
+                        seed_candidates.append((clat, clng, -alpha))
+                        seen.append((clat, clng))
+                if len(seed_candidates) >= max_iter:
                     break
-                clat = base_lat * (1 - alpha) + m["lat"] * alpha
-                clng = base_lng * (1 - alpha) + m["lng"] * alpha
-                dup = any(abs(clat - s[0]) < _FAIR_DEDUP and abs(clng - s[1]) < _FAIR_DEDUP
-                          for s in seen)
-                if not dup:
-                    candidates.append((clat, clng, -alpha))   # p 자리에 -alpha 로 구분
-                    seen.append((clat, clng))
-            if len(candidates) >= max_iter:
-                break
 
-    candidates = candidates[:max_iter]
+        # 시드 평가 → spread 최소 시드의 raw 좌표를 시작점으로
+        seed_start_lat = seed_candidates[0][0]
+        seed_start_lng = seed_candidates[0][1]
+        seed_best_spread = float("inf")
 
-    # ── 2단계: 각 후보 → 역 스냅 → 스냅된 역에서 평가 ────────────────
-    best_lat, best_lng = candidates[0][0], candidates[0][1]
-    best_spread = float("inf")
-    best_mean   = float("inf")
-    best_time_map: dict = {}
-    best_station_name: str | None = None
+        for i, (clat, clng, p) in enumerate(seed_candidates):
+            station = await _find_nearby_landmark(client, clat, clng)
+            eval_lat = station["lat"] if station else clat
+            eval_lng = station["lng"] if station else clng
+            eval_name = station["name"] if station else None
 
-    for clat, clng, p in candidates:
-        # 가장 가까운 역으로 스냅 (평가도 실제 모일 지점에서)
-        station = await _find_nearby_landmark(client, clat, clng)
-        if station:
-            eval_lat = station["lat"]
-            eval_lng = station["lng"]
-            eval_name = station["name"]
-        else:
-            eval_lat, eval_lng = clat, clng
-            eval_name = None
+            times = await asyncio.gather(*[
+                _travel_minutes(client, m["lat"], m["lng"], eval_lat, eval_lng, m["transport"])
+                for m in members
+            ])
+            times_list = list(times)
+            spread = max(times_list) - min(times_list)
+            max_name = members[times_list.index(max(times_list))]["name"]
+            p_label = f"p={p:.2f}" if p >= 0 else f"dir={abs(p):.2f}"
+            names_str = ", ".join(f"{m['name']}={t:.0f}" for m, t in zip(members, times_list))
+            print(f"[Fair][seed][{i}] {p_label}  snap={eval_name or '미스냅'}  "
+                  f"t=[{names_str}]  spread={spread:.1f}  max={max_name}")
+
+            if spread < seed_best_spread:
+                seed_best_spread = spread
+                seed_start_lat = clat  # raw 좌표: descent가 탐색 공간에서 직접 이동
+                seed_start_lng = clng
+
+        print(f"[Fair][seed] 시작점=({seed_start_lat:.5f},{seed_start_lng:.5f})"
+              f"  seed_spread={seed_best_spread:.1f}")
+    else:
+        # 단일 교통수단: 지리적 centroid를 바로 시작점으로
+        seed_start_lat = sum(m["lat"] for m in members) / n
+        seed_start_lng = sum(m["lng"] for m in members) / n
+        print(f"[Fair][seed] 단일 교통수단({next(iter(transports))}) → centroid 직행"
+              f"  ({seed_start_lat:.5f},{seed_start_lng:.5f})")
+
+    # ── descent 단계 ──────────────────────────────────────────────────
+    descent_records: list[dict] = []
+    cur_lat, cur_lng = seed_start_lat, seed_start_lng
+    step = _FAIR_DESCENT_STEP
+
+    for it in range(max_iter):
+        station = await _find_nearby_landmark(client, cur_lat, cur_lng)
+        eval_lat = station["lat"] if station else cur_lat
+        eval_lng = station["lng"] if station else cur_lng
+        eval_name = station["name"] if station else None
 
         times = await asyncio.gather(*[
             _travel_minutes(client, m["lat"], m["lng"], eval_lat, eval_lng, m["transport"])
             for m in members
         ])
-        time_map = {m["name"]: t for m, t in zip(members, times)}
+        times_list = list(times)
+        time_map = {m["name"]: t for m, t in zip(members, times_list)}
+        spread = max(times_list) - min(times_list)
+        mean_t = sum(times_list) / n
+        max_idx = times_list.index(max(times_list))
+        max_member = members[max_idx]
 
-        mean_t = sum(times) / n
-        spread = max(times) - min(times)
+        names_str = ", ".join(f"{m['name']}={t:.0f}" for m, t in zip(members, times_list))
+        print(f"[Fair][descent][{it}]  snap={eval_name or '미스냅'}  "
+              f"t=[{names_str}]  spread={spread:.1f}  max={max_member['name']}  step={step:.3f}")
 
-        names_str = ", ".join(f"{m['name']}{t:.0f}" for m, t in zip(members, times))
-        p_label = f"p={p:.2f}" if p >= 0 else f"dir={abs(p):.2f}"
-        print(f"[Fair] {p_label}  snap={eval_name or '미스냅'}  "
-              f"mean={mean_t:.1f}  spread={spread:.1f}  t=[{names_str}]")
+        descent_records.append({
+            "lat": eval_lat, "lng": eval_lng,
+            "time_map": time_map, "spread": spread,
+            "mean": mean_t, "station_name": eval_name, "iter": it,
+        })
 
-        # 이상치 경고
-        sorted_t = sorted(times)
-        mid = n // 2
-        median_t = sorted_t[mid] if n % 2 == 1 else (sorted_t[mid-1] + sorted_t[mid]) / 2.0
-        for m, t in zip(members, times):
-            if median_t > 0 and t > 2.5 * median_t:
-                print(f"[WARN] 라우팅 이상치 의심: {m['name']} {t:.0f}분 snap={eval_name}")
-
-        if spread <= 2.0:
-            best_lat, best_lng = eval_lat, eval_lng
-            best_spread = spread
-            best_mean   = mean_t
-            best_time_map = time_map
-            best_station_name = eval_name
-            print(f"[Fair] spread≤2분 → 조기 채택 snap={eval_name}")
+        if spread < 2.0:
+            print(f"[Fair][descent] spread<2분 → 조기 종료 (iter={it})")
             break
 
-        # spread 최소 우선, 동률이면 mean 최소로 tie-break
-        if (spread, mean_t) < (best_spread, best_mean):
-            best_spread = spread
-            best_mean   = mean_t
-            best_lat, best_lng = eval_lat, eval_lng
-            best_time_map = time_map
-            best_station_name = eval_name
+        # 가장 느린 멤버 방향으로 이동 (한국 위도 범위, raw lat/lng 차)
+        cur_lat = cur_lat + step * (max_member["lat"] - cur_lat)
+        cur_lng = cur_lng + step * (max_member["lng"] - cur_lng)
+        step *= 0.7
 
-    # ── 채택 후보 자동차 경고 ────────────────────────────────────────
-    car_times     = [best_time_map[m["name"]] for m in members
+    # ── 최종 채택: descent 후보 중 spread 최소 (동률이면 mean 최소) ────
+    best = min(descent_records, key=lambda r: (r["spread"], r["mean"]))
+    print(f"[Fair] 최종 채택: iter={best['iter']}  snap={best['station_name']}  "
+          f"spread={best['spread']:.1f}  mean={best['mean']:.1f}")
+
+    # ── 자동차 경고 ────────────────────────────────────────────────────
+    car_times     = [best["time_map"][m["name"]] for m in members
                      if m.get("transport") == "car"]
-    transit_times = [best_time_map[m["name"]] for m in members
+    transit_times = [best["time_map"][m["name"]] for m in members
                      if m.get("transport") != "car"]
     if car_times and transit_times:
         avg_transit = sum(transit_times) / len(transit_times)
         for m in members:
-            if m.get("transport") == "car" and best_time_map[m["name"]] > avg_transit:
+            if m.get("transport") == "car" and best["time_map"][m["name"]] > avg_transit:
                 print(f"[WARN] 자동차가 더 느림 ({m['name']} "
-                      f"{best_time_map[m['name']]:.0f}분 > 대중교통 평균 {avg_transit:.0f}분)")
+                      f"{best['time_map'][m['name']]:.0f}분 > 대중교통 평균 {avg_transit:.0f}분)")
 
-    t_str = ", ".join(f"{k}{v:.0f}" for k, v in best_time_map.items())
-    print(f"[Fair] 최종 채택: snap={best_station_name}  spread={best_spread:.1f}  mean={best_mean:.1f}  t=[{t_str}]")
-    # 4-tuple: 화면 표시값(역 좌표·역명·이동시간)을 모두 포함 — get_midpoint가 그대로 사용
-    return best_lat, best_lng, best_time_map, best_station_name
+    return best["lat"], best["lng"], best["time_map"], best["station_name"]
 
 
 # ── Supabase REST 헬퍼 (비동기) ───────────────────────────────────
